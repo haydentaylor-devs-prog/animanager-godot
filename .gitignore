@@ -1,0 +1,20 @@
+# Godot 4 import cache and editor artifacts. Project consumers
+# shouldn't carry these; they regenerate on first open.
+.import/
+.godot/
+*.import
+export.cfg
+export_presets.cfg
+
+# IDE / OS scratch.
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test project builds (when we add a test harness in /test_project).
+test_project/.godot/
+test_project/.import/
+
+# Editor scratch in case someone opens the repo as a project.
+project.godot

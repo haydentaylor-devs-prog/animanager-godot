@@ -1,0 +1,69 @@
+{
+  "formatVersion": 1,
+  "kind": "animanager.rig",
+  "exportedAt": "2026-06-09T14:23:18.421Z",
+  "animation": {
+    "uuid": "anim-demo-1",
+    "name": "Quarter Turn",
+    "frameRate": 24,
+    "totalFrames": 13,
+    "isLooping": true,
+    "frameColors": {},
+    "audioMarkers": {}
+  },
+  "skeleton": [
+    {
+      "uuid": "bone-spinner",
+      "name": "Spinner",
+      "parentBoneUuid": null,
+      "startX": 0.0,
+      "startY": 0.0,
+      "endX": 80.0,
+      "endY": 0.0,
+      "length": 80.0,
+      "rotation": 0.0,
+      "sortOrder": 0,
+      "partRotationOffset": 0.0,
+      "partFlipX": false,
+      "partFlipY": false,
+      "connectToParentStart": false,
+      "rootJointAtStart": true,
+      "partOffsetX": 0.0,
+      "partOffsetY": 0.0,
+      "minRotation": null,
+      "maxRotation": null
+    }
+  ],
+  "keyframes": [
+    {
+      "boneUuid": "bone-spinner",
+      "frameNumber": 0,
+      "rotation": 0.0,
+      "translateX": 0.0,
+      "translateY": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "interpolationType": "easeInOut",
+      "bezierCP1X": null,
+      "bezierCP1Y": null,
+      "bezierCP2X": null,
+      "bezierCP2Y": null,
+      "partSortOrder": null
+    },
+    {
+      "boneUuid": "bone-spinner",
+      "frameNumber": 12,
+      "rotation": 1.5707963267948966,
+      "translateX": 0.0,
+      "translateY": 0.0,
+      "scaleX": 1.0,
+      "scaleY": 1.0,
+      "interpolationType": "linear",
+      "bezierCP1X": null,
+      "bezierCP1Y": null,
+      "bezierCP2X": null,
+      "bezierCP2Y": null,
+      "partSortOrder": null
+    }
+  ]
+}
