@@ -15,7 +15,10 @@ const _BEZIER_EPS := 0.001
 
 # ── Easing curves (spec §9) ────────────────────────────────────────
 
-static func ease(t: float, interp_type: String, kf: Dictionary) -> float:
+# NOTE: named apply_easing (not `ease`) because Godot 4 reserves the
+# global `ease(value, curve)` built-in; same goes for `sign` below.
+
+static func apply_easing(t: float, interp_type: String, kf: Dictionary) -> float:
 	match interp_type:
 		"linear":
 			return t
@@ -70,15 +73,10 @@ static func _bezier_axis_deriv(t: float, p1: float, p2: float) -> float:
 
 
 # ── Angle interpolation (shortest arc, spec §10.2) ─────────────────
-
-static func lerp_angle(a: float, b: float, t: float) -> float:
-	var diff := fposmod(b - a, TAU)
-	if diff > PI:
-		diff -= TAU
-	elif diff < -PI:
-		diff += TAU
-	return a + diff * t
-
+#
+# We call Godot's global `lerp_angle(from, to, weight)` directly —
+# it implements the same shortest-arc semantics the spec describes
+# (interpolates correctly when angles wrap around TAU).
 
 # ── Per-bone keyframe interpolation ────────────────────────────────
 #
@@ -124,7 +122,7 @@ static func interpolate(frames: Array, frame: float) -> Dictionary:
 
 	var span: float = float(after.frame_number - before.frame_number)
 	var t_linear: float = (frame - before.frame_number) / span
-	var t_eased := ease(t_linear, before.interpolation_type, before)
+	var t_eased := apply_easing(t_linear, before.interpolation_type, before)
 
 	return {
 		"rotation": lerp_angle(before.rotation, after.rotation, t_eased),
@@ -188,15 +186,11 @@ static func solve_two_bone_ik(
 	var b := acos(clampf(cos_b, -1.0, 1.0))
 
 	var base_angle := atan2(to_target.y, to_target.x)
-	var parent_rot := base_angle - a * sign(pole_side)
-	var leaf_rot := parent_rot + (PI - b) * sign(pole_side)
+	# Inline pole direction — treating 0 as +1 ("bend left" default).
+	# Inlined (instead of a helper) because GDScript 4 reserves
+	# `sign()` as a global built-in.
+	var pole_dir: float = 1.0 if pole_side >= 0 else -1.0
+	var parent_rot: float = base_angle - a * pole_dir
+	var leaf_rot: float = parent_rot + (PI - b) * pole_dir
 
 	return Vector2(parent_rot, leaf_rot)
-
-
-static func sign(x: int) -> int:
-	if x > 0:
-		return 1
-	if x < 0:
-		return -1
-	return 1  # Default: bend "left" when poleSide is 0 / unspecified.
