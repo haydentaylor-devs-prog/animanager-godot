@@ -214,8 +214,9 @@ registration rebinds. Right-click any imported `.rig` →
 scene to flush its `ext_resource` block.
 
 Recent versions ship stable `.uid` sidecar files so this should
-only happen if you're updating from an install older than the UID
-commit (commit `<placeholder — set after push>`).
+only happen once when updating from an install older than commit
+`c779de3` (the UID commit). After that one toggle + reimport,
+future re-downloads keep references intact.
 
 ### `AniAnimationPlayer2D` doesn't appear in the Create Node dialog
 
