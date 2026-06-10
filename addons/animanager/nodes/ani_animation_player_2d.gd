@@ -19,6 +19,7 @@ signal animation_looped
 	set(value):
 		rig = value
 		_rebuild_indices()
+		_auto_bind_from_sprite_pack()
 		_evaluate_pose(_current_frame)
 		queue_redraw()
 
@@ -27,6 +28,17 @@ signal animation_looped
 @export var sprite_bindings: Dictionary = {}:
 	set(value):
 		sprite_bindings = value
+		queue_redraw()
+
+# Optional path to a folder of PNGs named by bone name (matching what
+# AniManager's "Export Rig" produces in its sister `.parts/` folder).
+# When set, on rig assignment we auto-fill sprite_bindings with every
+# bone whose name matches a PNG in the folder. Explicit entries in
+# sprite_bindings take precedence — they're never overwritten.
+@export_dir var sprite_pack_folder: String = "":
+	set(value):
+		sprite_pack_folder = value
+		_auto_bind_from_sprite_pack()
 		queue_redraw()
 
 @export var auto_play: bool = false
@@ -206,6 +218,65 @@ func _rebuild_indices() -> void:
 		if leaf.is_empty():
 			continue
 		_ik_chains_by_leaf[leaf] = chain
+
+
+# ── Sprite pack auto-binding ───────────────────────────────────────
+
+func _auto_bind_from_sprite_pack() -> void:
+	# Walk sprite_pack_folder and, for every PNG whose basename matches
+	# a bone's name (case-sensitive), populate sprite_bindings if the
+	# user hasn't already explicitly mapped that bone. Skips silently
+	# when either input is empty so this is safe to call any time.
+	if rig == null:
+		return
+	if sprite_pack_folder == null or sprite_pack_folder == "":
+		return
+	var dir := DirAccess.open(sprite_pack_folder)
+	if dir == null:
+		push_warning(
+			"AniManager: sprite_pack_folder %s does not exist or isn't readable"
+				% sprite_pack_folder
+		)
+		return
+
+	# Index PNGs by basename (without extension).
+	var pngs := {}
+	dir.list_dir_begin()
+	var file_name := dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir() and file_name.to_lower().ends_with(".png"):
+			var stem := file_name.substr(0, file_name.length() - 4)
+			pngs[stem] = "%s/%s" % [sprite_pack_folder.rstrip("/"), file_name]
+		file_name = dir.get_next()
+	dir.list_dir_end()
+
+	if pngs.is_empty():
+		return
+
+	# Match every bone whose name has a corresponding PNG and isn't
+	# already explicitly bound by the user.
+	var bound_count := 0
+	for bone in rig.bones:
+		var bone_name: String = bone.get("name", "")
+		if bone_name.is_empty():
+			continue
+		if sprite_bindings.has(bone_name) or sprite_bindings.has(bone.get("uuid", "")):
+			continue  # Don't clobber a user override.
+		if not pngs.has(bone_name):
+			continue
+		var tex: Texture2D = load(pngs[bone_name])
+		if tex == null:
+			continue
+		sprite_bindings[bone_name] = tex
+		bound_count += 1
+	# Note: assigning a key into the existing Dictionary doesn't fire
+	# the @export setter — that's fine, we don't want recursion. The
+	# redraw is triggered by whichever caller set rig / sprite_pack_folder.
+	if bound_count > 0:
+		print(
+			"AniManager: auto-bound %d sprite(s) from %s" %
+				[bound_count, sprite_pack_folder]
+		)
 
 
 # ── Pose evaluation ────────────────────────────────────────────────

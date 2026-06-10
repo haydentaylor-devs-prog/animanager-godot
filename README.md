@@ -108,23 +108,35 @@ imported `.rig` files reconnect automatically.
 
 ### Binding sprites
 
-The plugin doesn't ship sprite data — the `.rig` format never
-includes images. Once the debug bones look right:
+The `.rig` format itself never includes images, but AniManager's
+"Export Rig" optionally writes a sister `<name>.parts/` directory
+next to the `.rig` containing one PNG per bone (named by bone
+name). The plugin can auto-bind from such a folder:
+
+1. Drop both the `.rig` AND the `.parts/` folder into your Godot
+   project tree.
+2. On your `AniAnimationPlayer2D` node, set **Sprite Pack Folder**
+   to the imported `.parts/` folder (browse for it in the inspector).
+3. Assign the **Rig** — it'll print
+   `AniManager: auto-bound N sprite(s) from <folder>` to the
+   Output panel and fill the `sprite_bindings` dictionary.
+
+To override or supplement what the pack provides, set entries on
+`sprite_bindings` directly:
 
 ```gdscript
 @onready var player := $AniAnimationPlayer2D
 
 func _ready() -> void:
-    player.sprite_bindings = {
-        "Head": preload("res://art/head.png"),
-        "Torso": preload("res://art/torso.png"),
-        "Hand_R": preload("res://art/hand_right.png"),
-    }
+    # Auto-bind from the pack handles most bones; tweak specific
+    # ones in code:
+    player.sprite_bindings["Hand_R"] = preload("res://art/special_hand.png")
 ```
 
-Keys can be either the bone's `uuid` (stable across exports, ugly)
-or its `name` (human-readable, must match the editor exactly).
-Name lookup is case-sensitive.
+Explicit `sprite_bindings` entries take precedence — auto-bind
+never overwrites them. Keys can be either the bone's `uuid`
+(stable across exports, ugly) or its `name` (human-readable, must
+match the editor exactly). Name lookup is case-sensitive.
 
 ### Attaching effects to a bone
 
