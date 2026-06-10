@@ -57,11 +57,15 @@ var _frames_by_bone: Dictionary = {}          # uuid → Array of keyframe Dicts
 var _ik_chains_by_leaf: Dictionary = {}       # leaf_uuid → chain Dict
 
 # Per-frame transforms (rebuilt each tick).
-var _local_transform_by_uuid: Dictionary = {} # uuid → Transform2D
-var _world_transform_by_uuid: Dictionary = {} # uuid → Transform2D
-# Per-frame world rotation of each bone (radians) — easier to read
-# than decomposing from the transform for the IK pass.
-var _world_rotation_by_uuid: Dictionary = {}
+# Per-frame pose data, keyed by bone uuid. Each entry is a Dictionary
+# mirroring BoneWorldTransform in the AniManager source:
+#   world_start: Vector2  — bone's start joint in world space
+#   world_end:   Vector2  — bone's end joint in world space
+#   world_rotation: float — bone's world-space rotation (radians)
+#   scaled_length:  float — bone.length × ((scale_x + scale_y) / 2)
+# Bones extend from world_start to world_end; sprites pivot on
+# world_start (or world_end for bones with rootJointAtStart=false).
+var _pose_by_uuid: Dictionary = {}
 
 
 # ── Public playback API ────────────────────────────────────────────
@@ -105,15 +109,20 @@ func set_current_frame(frame: float) -> void:
 func get_bone_world_transform(bone_uuid_or_name: String) -> Transform2D:
 	# Lookup helper for game code that wants to attach effects /
 	# particles to a bone (e.g. spawn a sparks particle at "Hand_R"'s
-	# tip). Returns identity if the bone isn't found.
-	if _world_transform_by_uuid.has(bone_uuid_or_name):
-		return _world_transform_by_uuid[bone_uuid_or_name]
-	# Try name lookup.
-	for uuid in _bone_by_uuid:
-		var b: Dictionary = _bone_by_uuid[uuid]
-		if b.name == bone_uuid_or_name:
-			return _world_transform_by_uuid.get(uuid, Transform2D.IDENTITY)
-	return Transform2D.IDENTITY
+	# tip). The Transform2D is anchored at the bone's world_start with
+	# its world_rotation — multiply by `Vector2(length, 0)` to land at
+	# the end joint. Returns identity if the bone isn't found.
+	var pose: Dictionary = _pose_by_uuid.get(bone_uuid_or_name, {})
+	if pose.is_empty():
+		# Try name lookup.
+		for uuid in _bone_by_uuid:
+			var b: Dictionary = _bone_by_uuid[uuid]
+			if b.name == bone_uuid_or_name:
+				pose = _pose_by_uuid.get(uuid, {})
+				break
+	if pose.is_empty():
+		return Transform2D.IDENTITY
+	return Transform2D(float(pose.world_rotation), Vector2(pose.world_start))
 
 
 # ── Lifecycle ──────────────────────────────────────────────────────
@@ -162,9 +171,7 @@ func _rebuild_indices() -> void:
 	_bone_roots.clear()
 	_frames_by_bone.clear()
 	_ik_chains_by_leaf.clear()
-	_local_transform_by_uuid.clear()
-	_world_transform_by_uuid.clear()
-	_world_rotation_by_uuid.clear()
+	_pose_by_uuid.clear()
 
 	if rig == null:
 		return
@@ -204,17 +211,19 @@ func _rebuild_indices() -> void:
 # ── Pose evaluation ────────────────────────────────────────────────
 
 func _evaluate_pose(frame: float) -> void:
-	_local_transform_by_uuid.clear()
-	_world_transform_by_uuid.clear()
-	_world_rotation_by_uuid.clear()
-
-	# FK pass: walk roots → descendants, composing parent transforms.
+	# Model mirrors BoneTransformCalculator in the AniManager source:
+	# bones are described by world start + end joints + world rotation,
+	# not by composing parent-relative Transform2Ds. A bone's start
+	# joint follows its parent's end joint (or start joint when
+	# connect_to_parent_start is true); the keyframe rotation is LOCAL
+	# (added to the parent's world rotation).
+	_pose_by_uuid.clear()
 	for root in _bone_roots:
-		_evaluate_bone_fk(root, Transform2D.IDENTITY, 0.0, frame)
+		_evaluate_bone_fk(root, frame)
 
-	# IK pass: override the parent + leaf rotations of each enabled
-	# chain, then re-walk descendants of the leaf so any sub-tree
-	# inherits the new orientation.
+	# IK pass: solve each enabled chain, overwrite the parent's + leaf's
+	# rotation + joint positions, then re-walk the leaf's descendants
+	# so any sub-tree inherits the new orientation.
 	if rig != null:
 		for leaf_uuid in _ik_chains_by_leaf:
 			var chain: Dictionary = _ik_chains_by_leaf[leaf_uuid]
@@ -223,9 +232,7 @@ func _evaluate_pose(frame: float) -> void:
 			_apply_ik_chain(leaf_uuid, chain, frame)
 
 
-func _evaluate_bone_fk(
-	uuid: String, parent_world: Transform2D, parent_rotation: float, frame: float
-) -> void:
+func _evaluate_bone_fk(uuid: String, frame: float) -> void:
 	var bone: Dictionary = _bone_by_uuid.get(uuid, {})
 	if bone.is_empty():
 		return
@@ -233,26 +240,103 @@ func _evaluate_bone_fk(
 	var frames: Array = _frames_by_bone.get(uuid, [])
 	var p := AniPoseEvaluator.interpolate(frames, frame)
 
-	# Local transform = T(translate) × R(rotation) × S(scale).
-	var local := Transform2D.IDENTITY
-	local = local.translated(Vector2(p.translate_x, p.translate_y))
-	local = local.rotated(p.rotation)
-	local = local.scaled(Vector2(p.scale_x, p.scale_y))
+	var translate_x: float = p.translate_x
+	var translate_y: float = p.translate_y
+	var scale_x: float = p.scale_x
+	var scale_y: float = p.scale_y
+	var local_rotation: float = p.rotation
+	var scaled_length: float = float(bone.length) * ((scale_x + scale_y) * 0.5)
 
-	# Apply min/max rotation clamp if the bone has constraints set.
-	# (We can't perfectly enforce this in the local-only pass because
-	# the constraint is on world rotation — but in practice keyframes
-	# author already-clamped values, so the clamp is mostly a safety
-	# net for game-side overrides via set_bone_world_rotation.)
-	var world := parent_world * local
-	var world_rotation: float = parent_rotation + p.rotation
+	var parent_uuid: Variant = bone.parent_uuid
+	var has_parent: bool = (
+		parent_uuid != null
+		and not (parent_uuid is String and (parent_uuid as String).is_empty())
+	)
 
-	_local_transform_by_uuid[uuid] = local
-	_world_transform_by_uuid[uuid] = world
-	_world_rotation_by_uuid[uuid] = world_rotation
+	# Step 1: world start position + the world rotation the local
+	# rotation will be added on top of.
+	var world_start: Vector2
+	var parent_base_rotation: float
+	if has_parent:
+		var parent_pose: Dictionary = _pose_by_uuid.get(parent_uuid, {})
+		if parent_pose.is_empty():
+			# Parent wasn't visited yet — happens when the JSON lists
+			# children before parents. Fall back to rest and continue.
+			world_start = Vector2(float(bone.start_x), float(bone.start_y))
+			parent_base_rotation = 0.0
+		else:
+			if bone.connect_to_parent_start:
+				world_start = Vector2(parent_pose.world_start)
+			else:
+				world_start = Vector2(parent_pose.world_end)
+			# Edge case from the reference impl: when the parent IS a
+			# root bone and this bone connects to the joint that's the
+			# parent's "root" (rootJointAtStart side), the base rotation
+			# uses the parent's REST rotation, not its animated world
+			# rotation. Affects rigs with a non-default rootJointAtStart.
+			var parent_bone: Dictionary = _bone_by_uuid.get(parent_uuid, {})
+			var parent_is_root: bool = (
+				parent_bone.get("parent_uuid") == null
+				or (
+					parent_bone.get("parent_uuid") is String
+					and (parent_bone.get("parent_uuid") as String).is_empty()
+				)
+			)
+			var on_root_joint_side: bool = (
+				parent_is_root
+				and bone.connect_to_parent_start == parent_bone.root_joint_at_start
+			)
+			if on_root_joint_side:
+				parent_base_rotation = float(parent_bone.rotation)
+			else:
+				parent_base_rotation = float(parent_pose.world_rotation)
+		world_start += Vector2(translate_x, translate_y)
+	else:
+		# Root bone — its rest start position IS its world start.
+		world_start = Vector2(
+			float(bone.start_x) + translate_x,
+			float(bone.start_y) + translate_y
+		)
+		parent_base_rotation = 0.0
+
+	# Step 2: world rotation. For root bones the keyframe value IS
+	# the world rotation; for descendants it's added on top of the
+	# parent base.
+	var world_rotation: float
+	if has_parent:
+		world_rotation = parent_base_rotation + local_rotation
+	else:
+		world_rotation = local_rotation
+		# Root + rootJointAtStart=false edge: the bone's END joint is
+		# the fixed anchor and the START joint slides with rotation.
+		# Recompute world_start so the END lands at the rest end + the
+		# keyframe translate.
+		if not bone.root_joint_at_start:
+			var rest_end_x: float = float(bone.start_x) + float(bone.length) * cos(
+				float(bone.rotation)
+			)
+			var rest_end_y: float = float(bone.start_y) + float(bone.length) * sin(
+				float(bone.rotation)
+			)
+			world_start = Vector2(
+				rest_end_x + translate_x - scaled_length * cos(world_rotation),
+				rest_end_y + translate_y - scaled_length * sin(world_rotation),
+			)
+
+	var world_end := world_start + Vector2(
+		scaled_length * cos(world_rotation),
+		scaled_length * sin(world_rotation),
+	)
+
+	_pose_by_uuid[uuid] = {
+		"world_start": world_start,
+		"world_end": world_end,
+		"world_rotation": world_rotation,
+		"scaled_length": scaled_length,
+	}
 
 	for child_uuid in _bone_children.get(uuid, []):
-		_evaluate_bone_fk(child_uuid, world, world_rotation, frame)
+		_evaluate_bone_fk(child_uuid, frame)
 
 
 func _apply_ik_chain(leaf_uuid: String, chain: Dictionary, frame: float) -> void:
@@ -260,10 +344,13 @@ func _apply_ik_chain(leaf_uuid: String, chain: Dictionary, frame: float) -> void
 	if leaf.is_empty():
 		return
 	var parent_uuid: Variant = leaf.parent_uuid
-	if parent_uuid == null or (parent_uuid is String and (parent_uuid as String).is_empty()):
-		return  # Need a parent for two-bone IK.
-	var parent_bone: Dictionary = _bone_by_uuid.get(parent_uuid, {})
-	if parent_bone.is_empty():
+	if (
+		parent_uuid == null
+		or (parent_uuid is String and (parent_uuid as String).is_empty())
+	):
+		return  # Two-bone IK needs a parent above the leaf.
+	var parent_pose: Dictionary = _pose_by_uuid.get(parent_uuid, {})
+	if parent_pose.is_empty():
 		return
 
 	# Target: prefer the per-frame ikTargetX/Y on the leaf's keyframes
@@ -276,50 +363,45 @@ func _apply_ik_chain(leaf_uuid: String, chain: Dictionary, frame: float) -> void
 	if not is_nan(interp.ik_target_y):
 		target.y = interp.ik_target_y
 
-	# Shoulder position = parent's *parent* end joint in world space.
-	# If the parent has no parent (the parent IS a root), use the
-	# parent's own start joint, which lives at parent_world * (0,0).
-	# Either way the shoulder is the parent's world origin.
-	var shoulder_t: Transform2D = _world_transform_by_uuid.get(
-		parent_uuid, Transform2D.IDENTITY
-	)
-	var shoulder: Vector2 = shoulder_t.origin
-
-	var l1: float = float(parent_bone.length)
-	var l2: float = float(leaf.length)
-
+	# Shoulder = the chain parent's world START joint (the joint
+	# closest to the rest of the body that doesn't move with IK).
+	var shoulder: Vector2 = parent_pose.world_start
+	var l1: float = float(parent_pose.scaled_length)
+	var l2: float = float(_pose_by_uuid.get(leaf_uuid, {"scaled_length": float(leaf.length)}).scaled_length)
 	var pole_side: int = int(chain.get("pole_side", 1))
 	var rotations: Vector2 = AniPoseEvaluator.solve_two_bone_ik(
 		shoulder, l1, l2, target, pole_side
 	)
-	var parent_rot: float = rotations.x
-	var leaf_rot: float = rotations.y
+	var parent_world_rotation: float = rotations.x
+	var leaf_world_rotation: float = rotations.y
 
-	# Rebuild the parent's world transform with the solver's rotation.
-	# Keep its existing translate+scale; just overwrite rotation.
-	# (For most rigs the FK translate/scale for IK-driven bones is
-	# zero/one, but we preserve them in case the author intentionally
-	# set them.)
-	_replace_world_rotation(parent_uuid, parent_rot)
-	_replace_world_rotation(leaf_uuid, leaf_rot)
+	# Rebuild the parent's pose: shoulder stays put; end follows the
+	# new rotation.
+	var parent_end := shoulder + Vector2(
+		l1 * cos(parent_world_rotation), l1 * sin(parent_world_rotation)
+	)
+	_pose_by_uuid[parent_uuid] = {
+		"world_start": shoulder,
+		"world_end": parent_end,
+		"world_rotation": parent_world_rotation,
+		"scaled_length": l1,
+	}
 
-	# Re-walk descendants of the leaf so they inherit its new world
-	# orientation.
+	# Leaf starts at the parent's new end joint, extends along the
+	# leaf rotation.
+	var leaf_end := parent_end + Vector2(
+		l2 * cos(leaf_world_rotation), l2 * sin(leaf_world_rotation)
+	)
+	_pose_by_uuid[leaf_uuid] = {
+		"world_start": parent_end,
+		"world_end": leaf_end,
+		"world_rotation": leaf_world_rotation,
+		"scaled_length": l2,
+	}
+
+	# Re-walk descendants of the leaf so they inherit the new orientation.
 	for child_uuid in _bone_children.get(leaf_uuid, []):
-		var leaf_world: Transform2D = _world_transform_by_uuid[leaf_uuid]
-		_evaluate_bone_fk(child_uuid, leaf_world, leaf_rot, frame)
-
-
-func _replace_world_rotation(uuid: String, new_world_rotation: float) -> void:
-	var t: Transform2D = _world_transform_by_uuid.get(uuid, Transform2D.IDENTITY)
-	# Extract translate + scale, drop rotation.
-	var origin := t.origin
-	var sx := t.x.length()
-	var sy := t.y.length()
-	var rebuilt := Transform2D(new_world_rotation, origin)
-	rebuilt = rebuilt.scaled_local(Vector2(sx, sy))
-	_world_transform_by_uuid[uuid] = rebuilt
-	_world_rotation_by_uuid[uuid] = new_world_rotation
+		_evaluate_bone_fk(child_uuid, frame)
 
 
 # ── Drawing ────────────────────────────────────────────────────────
@@ -342,14 +424,14 @@ func _draw() -> void:
 	for entry in draw_order:
 		var uuid: String = entry.uuid
 		var bone: Dictionary = _bone_by_uuid[uuid]
-		var world: Transform2D = _world_transform_by_uuid.get(
-			uuid, Transform2D.IDENTITY
-		)
+		var pose: Dictionary = _pose_by_uuid.get(uuid, {})
+		if pose.is_empty():
+			continue
 		var texture: Texture2D = _texture_for_bone(uuid, bone)
 		if texture != null:
-			_draw_bone_sprite(bone, world, texture)
+			_draw_bone_sprite(bone, pose, texture)
 		elif draw_bones_in_editor or not Engine.is_editor_hint():
-			_draw_bone_debug(bone, world)
+			_draw_bone_debug(pose)
 
 
 func _texture_for_bone(uuid: String, bone: Dictionary) -> Texture2D:
@@ -363,31 +445,37 @@ func _texture_for_bone(uuid: String, bone: Dictionary) -> Texture2D:
 	return null
 
 
-func _draw_bone_debug(bone: Dictionary, world: Transform2D) -> void:
-	# The bone is from (0,0) to (length, 0) in its local space.
-	var start := world.origin
-	var end := world * Vector2(float(bone.length), 0.0)
-	draw_line(start, end, bone_color, bone_width)
-	draw_circle(start, joint_radius, joint_color)
+func _draw_bone_debug(pose: Dictionary) -> void:
+	draw_line(pose.world_start, pose.world_end, bone_color, bone_width)
+	draw_circle(pose.world_start, joint_radius, joint_color)
 
 
 func _draw_bone_sprite(
-	bone: Dictionary, world: Transform2D, texture: Texture2D
+	bone: Dictionary, pose: Dictionary, texture: Texture2D
 ) -> void:
-	# Apply part offset / rotation / flip on top of the bone's world
-	# transform, then draw the texture centered on the resulting
-	# point.
-	var part_xf := Transform2D.IDENTITY
-	part_xf = part_xf.translated(
+	# Bone sprites pivot on the bone's "root joint" (start or end
+	# depending on bone.root_joint_at_start). Apply part_offset and
+	# part_rotation_offset in bone-local space first, then the bone's
+	# world rotation, then translate to the pivot in world space.
+	var pivot: Vector2 = pose.world_start
+	if not bone.root_joint_at_start:
+		pivot = pose.world_end
+
+	var part_xf := Transform2D(
+		float(pose.world_rotation) + float(bone.part_rotation_offset),
+		pivot,
+	)
+	# Bone-local part offset, applied AFTER the world rotation by
+	# composing it as a local pre-translation.
+	part_xf = part_xf.translated_local(
 		Vector2(float(bone.part_offset_x), float(bone.part_offset_y))
 	)
-	part_xf = part_xf.rotated(float(bone.part_rotation_offset))
 	if bone.part_flip_x:
-		part_xf = part_xf.scaled(Vector2(-1.0, 1.0))
+		part_xf = part_xf.scaled_local(Vector2(-1.0, 1.0))
 	if bone.part_flip_y:
-		part_xf = part_xf.scaled(Vector2(1.0, -1.0))
+		part_xf = part_xf.scaled_local(Vector2(1.0, -1.0))
 
-	draw_set_transform_matrix(world * part_xf)
+	draw_set_transform_matrix(part_xf)
 	var size := texture.get_size()
 	var rect := Rect2(-size * 0.5, size)
 	draw_texture_rect(texture, rect, false)
