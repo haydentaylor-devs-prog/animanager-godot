@@ -48,28 +48,47 @@ Godot game project.
 
 ## Installation
 
-### Option 1: clone into `addons/`
+From your Godot project root, in PowerShell or bash:
 
-```bash
+```powershell
 cd <your-godot-project>
 git clone https://github.com/haydentaylor-devs-prog/animanager-godot.git temp
-mkdir -p addons
-cp -r temp/addons/animanager addons/
-rm -rf temp
+New-Item -ItemType Directory -Force -Path addons | Out-Null
+Move-Item temp\addons\animanager addons\
+Remove-Item -Recurse -Force temp
 ```
 
-### Option 2: download a release archive
+(bash users: `mkdir -p addons && cp -r temp/addons/animanager addons/ && rm -rf temp`)
 
-1. Download the latest release ZIP from this repo's Releases page.
-2. Extract `addons/animanager/` from the ZIP into your project's
-   `addons/` directory.
+Or download the latest release ZIP from this repo's Releases page
+and extract `addons/animanager/` into your project's `addons/`
+directory.
 
 ### Then in Godot
 
-1. Open your project.
+1. Open your project (or **Project → Reload Current Project** if
+   it was already open).
 2. **Project → Project Settings → Plugins** → tick **AniManager**.
 3. The editor will reimport any `.rig` files in your project tree
    automatically.
+
+## Updating
+
+The plugin ships stable `.uid` sidecar files, so re-downloading
+won't break your scene references the way it did in early versions.
+
+The simplest update for any install style:
+
+```powershell
+cd <your-godot-project>
+git clone https://github.com/haydentaylor-devs-prog/animanager-godot.git temp
+Remove-Item -Recurse -Force addons\animanager
+Move-Item temp\addons\animanager addons\
+Remove-Item -Recurse -Force temp
+```
+
+Then **Project → Reload Current Project** in Godot. Scenes and
+imported `.rig` files reconnect automatically.
 
 ---
 
@@ -169,6 +188,56 @@ animation (~10-30 bones, ~3-5 IK chains, 60 fps playback) this is
 comfortably real-time on a mid-range mobile GPU. If you hit a perf
 ceiling with much larger rigs we can revisit with a GDExtension
 (C++) port.
+
+---
+
+## Troubleshooting
+
+### "Parse Error" on enable
+
+Pull the latest from this repo — early versions had GDScript
+name-collisions with Godot 4 globals (`ease()`, `sign()`,
+`lerp_angle()`). Fixed in commit `5ebc536` and after.
+
+### Bones radiate from a single point instead of forming a chain
+
+Pull the latest. Pre-`ee7c661` versions composed bones as
+parent-relative transforms instead of following parent end joints.
+Fixed.
+
+### `Invalid UID` warnings after updating
+
+Toggle the plugin off then on
+(**Project → Project Settings → Plugins**) so the custom-type
+registration rebinds. Right-click any imported `.rig` →
+**Reimport** to refresh its companion `.import` file. Save the
+scene to flush its `ext_resource` block.
+
+Recent versions ship stable `.uid` sidecar files so this should
+only happen if you're updating from an install older than the UID
+commit (commit `<placeholder — set after push>`).
+
+### `AniAnimationPlayer2D` doesn't appear in the Create Node dialog
+
+Plugin's custom-type registration didn't take. Toggle the plugin
+off and back on. If still missing, check the Output panel for
+errors — paste them in a GitHub issue.
+
+### Animation plays but the character is upside down / mirrored
+
+Likely a rest-pose authoring difference between AniManager's scene
+and Godot's. AniManager uses Y-down (positive Y is screen-bottom),
+matching Godot. If you authored a rig assuming Y-up, the rest pose
+will be mirrored. Re-author with the correct orientation, or apply
+a `Scale: (1, -1)` on the parent of the `AniAnimationPlayer2D`
+node to flip Y at runtime.
+
+### Bones in editor view don't update when I scrub the timeline
+
+Editor view updates on `queue_redraw()` which fires from
+`_process()`. If you have `auto_play` off in the inspector, the
+node won't tick — set `current_frame` from a tool script if you
+want editor scrubbing, or just play the scene to verify.
 
 ---
 
