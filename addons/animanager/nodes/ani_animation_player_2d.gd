@@ -510,9 +510,20 @@ func _draw() -> void:
 	var draw_order: Array = []
 	for uuid in _bone_by_uuid:
 		var bone: Dictionary = _bone_by_uuid[uuid]
-		# Per-frame override.
+		# Sort key priority: per-frame keyframe override > part's
+		# base sortOrder (v1.2) > bone.sort_order (legacy fallback).
+		# Bone.sort_order is bone-list ordering and gets parts
+		# wrong whenever the artist set part.sortOrder independently
+		# (e.g. both arms on top of chest because all bones share
+		# sort_order = 0 but the parts have distinct values).
 		var part_sort: Variant = _interpolated_part_sort_order(uuid)
-		var sort_key: int = part_sort if part_sort != null else int(bone.sort_order)
+		var sort_key: int
+		if part_sort != null:
+			sort_key = int(part_sort)
+		elif bone.get("part_base_sort_order") != null:
+			sort_key = int(bone.part_base_sort_order)
+		else:
+			sort_key = int(bone.sort_order)
 		draw_order.append({"uuid": uuid, "key": sort_key})
 	draw_order.sort_custom(func(a, b): return int(a.key) < int(b.key))
 

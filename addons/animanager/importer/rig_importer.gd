@@ -138,6 +138,7 @@ func _import(
 			"part_rest_offset_x": bone.get("partRestOffsetX"),
 			"part_rest_offset_y": bone.get("partRestOffsetY"),
 			"rest_world_rotation": bone.get("restWorldRotation"),
+			"part_base_sort_order": bone.get("partBaseSortOrder"),
 		})
 
 	# Keyframes: same rename. ik_target_x/y are sentinel NAN when
