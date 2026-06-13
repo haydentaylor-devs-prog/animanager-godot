@@ -264,7 +264,7 @@ func _auto_bind_from_sprite_pack() -> void:
 			continue  # Don't clobber a user override.
 		if not pngs.has(bone_name):
 			continue
-		var tex: Texture2D = load(pngs[bone_name])
+		var tex: Texture2D = _load_png_robust(pngs[bone_name])
 		if tex == null:
 			continue
 		sprite_bindings[bone_name] = tex
@@ -272,11 +272,35 @@ func _auto_bind_from_sprite_pack() -> void:
 	# Note: assigning a key into the existing Dictionary doesn't fire
 	# the @export setter — that's fine, we don't want recursion. The
 	# redraw is triggered by whichever caller set rig / sprite_pack_folder.
-	if bound_count > 0:
-		print(
-			"AniManager: auto-bound %d sprite(s) from %s" %
-				[bound_count, sprite_pack_folder]
-		)
+	print(
+		"AniManager: auto-bound %d sprite(s) from %s" %
+			[bound_count, sprite_pack_folder]
+	)
+
+
+# Loads a PNG by path, falling back to a raw Image read when Godot's
+# import pipeline hasn't caught up to a freshly-dropped folder. The
+# editor imports each PNG asynchronously after a drop; if auto-bind
+# runs before that completes, load() returns null even though the
+# file is on disk. Image.load_from_file() reads the bytes directly,
+# bypassing the resource cache — so the bind succeeds regardless of
+# import state. The user can re-set sprite_pack_folder later to
+# pick up the properly-imported (compressed / mipmapped) version.
+func _load_png_robust(path: String) -> Texture2D:
+	var tex: Texture2D = load(path)
+	if tex != null:
+		return tex
+	var img := Image.new()
+	var err := img.load(path)
+	if err != OK:
+		# In editor mode, res:// paths resolve to project disk; in
+		# exported games the resource pack would have answered in
+		# load() above. Try the absolute path as a last-ditch.
+		var abs_path := ProjectSettings.globalize_path(path)
+		err = img.load(abs_path)
+		if err != OK:
+			return null
+	return ImageTexture.create_from_image(img)
 
 
 # ── Pose evaluation ────────────────────────────────────────────────
