@@ -127,6 +127,17 @@ func _import(
 			"part_offset_y": float(bone.get("partOffsetY", 0.0)),
 			"min_rotation": bone.get("minRotation"),
 			"max_rotation": bone.get("maxRotation"),
+			# v1.2 optional part-render hints. Pass through as null
+			# when absent so _draw_bone_sprite can detect them with
+			# `bone.part_width != null` and fall back to the legacy
+			# centered-on-pivot path for older rigs.
+			"part_width": bone.get("partWidth"),
+			"part_height": bone.get("partHeight"),
+			"part_pivot_x": bone.get("partPivotX"),
+			"part_pivot_y": bone.get("partPivotY"),
+			"part_rest_offset_x": bone.get("partRestOffsetX"),
+			"part_rest_offset_y": bone.get("partRestOffsetY"),
+			"rest_world_rotation": bone.get("restWorldRotation"),
 		})
 
 	# Keyframes: same rename. ik_target_x/y are sentinel NAN when

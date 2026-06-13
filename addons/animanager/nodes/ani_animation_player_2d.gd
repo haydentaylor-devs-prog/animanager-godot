@@ -548,10 +548,76 @@ func _draw_bone_debug(pose: Dictionary) -> void:
 func _draw_bone_sprite(
 	bone: Dictionary, pose: Dictionary, texture: Texture2D
 ) -> void:
-	# Bone sprites pivot on the bone's "root joint" (start or end
-	# depending on bone.root_joint_at_start). Apply part_offset and
-	# part_rotation_offset in bone-local space first, then the bone's
-	# world rotation, then translate to the pivot in world space.
+	# Spec §10.3. Two paths: the v1.2 "preferred" math when the
+	# exporter shipped part-render hints, and the legacy
+	# centered-on-pivot fallback for older rigs (or rigs exported
+	# without sprite_repository wired). The preferred path mirrors
+	# puppet_view._computePlacement in the AniManager source, so
+	# sprites land where the artist saw them on the tablet.
+	if bone.get("part_rest_offset_x") != null:
+		_draw_bone_sprite_v1_2(bone, pose, texture)
+	else:
+		_draw_bone_sprite_legacy(bone, pose, texture)
+
+
+func _draw_bone_sprite_v1_2(
+	bone: Dictionary, pose: Dictionary, texture: Texture2D
+) -> void:
+	# Delta between current world rotation and rest world rotation —
+	# this is what rotates the stored bone-local rest offset into the
+	# current frame's world space.
+	var delta := float(pose.world_rotation) - float(bone.rest_world_rotation)
+	var cos_d := cos(delta)
+	var sin_d := sin(delta)
+
+	var rest_off_x := float(bone.part_rest_offset_x)
+	var rest_off_y := float(bone.part_rest_offset_y)
+	var rot_rest_off_x := rest_off_x * cos_d - rest_off_y * sin_d
+	var rot_rest_off_y := rest_off_x * sin_d + rest_off_y * cos_d
+
+	var part_off_x := float(bone.part_offset_x)
+	var part_off_y := float(bone.part_offset_y)
+	var rot_part_off_x := part_off_x * cos_d - part_off_y * sin_d
+	var rot_part_off_y := part_off_x * sin_d + part_off_y * cos_d
+
+	var pivot_world := Vector2(
+		(pose.world_start as Vector2).x + rot_rest_off_x + rot_part_off_x,
+		(pose.world_start as Vector2).y + rot_rest_off_y + rot_part_off_y,
+	)
+
+	var part_world_rotation := delta + float(bone.part_rotation_offset)
+
+	# The bodyRect is drawn with the part's pivot at the origin of its
+	# own local coords — so pixels above/left of the pivot have
+	# negative coords, pixels below/right have positive. This is what
+	# makes draw_set_transform_matrix(world, rotation) put the pivot
+	# at pivot_world automatically.
+	var part_w := float(bone.part_width)
+	var part_h := float(bone.part_height)
+	var pivot_px := Vector2(
+		part_w * float(bone.part_pivot_x),
+		part_h * float(bone.part_pivot_y),
+	)
+	var body_rect := Rect2(-pivot_px, Vector2(part_w, part_h))
+
+	var xf := Transform2D(part_world_rotation, pivot_world)
+	if bone.part_flip_x:
+		xf = xf.scaled_local(Vector2(-1.0, 1.0))
+	if bone.part_flip_y:
+		xf = xf.scaled_local(Vector2(1.0, -1.0))
+
+	draw_set_transform_matrix(xf)
+	draw_texture_rect(texture, body_rect, false)
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+
+func _draw_bone_sprite_legacy(
+	bone: Dictionary, pose: Dictionary, texture: Texture2D
+) -> void:
+	# Pre-v1.2 fallback. Center the sprite on the bone's root joint
+	# and rotate by world rotation + part_rotation_offset. Doesn't
+	# honor per-part pivot — sprites can end up jumbled when the
+	# author drew non-symmetric parts. v1.2+ rigs avoid this.
 	var pivot: Vector2 = pose.world_start
 	if not bone.root_joint_at_start:
 		pivot = pose.world_end
@@ -560,8 +626,6 @@ func _draw_bone_sprite(
 		float(pose.world_rotation) + float(bone.part_rotation_offset),
 		pivot,
 	)
-	# Bone-local part offset, applied AFTER the world rotation by
-	# composing it as a local pre-translation.
 	part_xf = part_xf.translated_local(
 		Vector2(float(bone.part_offset_x), float(bone.part_offset_y))
 	)
@@ -574,7 +638,6 @@ func _draw_bone_sprite(
 	var size := texture.get_size()
 	var rect := Rect2(-size * 0.5, size)
 	draw_texture_rect(texture, rect, false)
-	# Reset transform so subsequent draw calls aren't affected.
 	draw_set_transform_matrix(Transform2D.IDENTITY)
 
 

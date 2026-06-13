@@ -25,6 +25,9 @@ extends Resource
 #   part_rotation_offset, part_flip_x, part_flip_y,
 #   connect_to_parent_start, root_joint_at_start,
 #   part_offset_x, part_offset_y, min_rotation, max_rotation.
+# v1.2-optional keys (null when not present in source rig):
+#   part_width, part_height, part_pivot_x, part_pivot_y,
+#   part_rest_offset_x, part_rest_offset_y, rest_world_rotation.
 # Kept as Dictionary (not a typed class) to keep the data layer
 # inspector-friendly and easy to .tres-serialize.
 @export var bones: Array = []
