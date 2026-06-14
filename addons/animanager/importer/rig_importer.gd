@@ -1,9 +1,17 @@
 @tool
 extends EditorImportPlugin
 
-# EditorImportPlugin: turns .rig files (drag in, autoimport, etc.) into
-# AniRigResource .tres files. Once imported, point an
-# AniAnimationPlayer2D node's `rig` property at the resource.
+# EditorImportPlugin: turns .rig and .animrig files (drag in,
+# autoimport, etc.) into AniRigResource .tres files. Once imported,
+# point an AniAnimationPlayer2D node's `rig` property at the resource.
+#
+# Two source shapes are handled:
+#   - .rig: a single JSON file. Companion sprite art (if any) lives
+#     in a sister `<name>.parts/` directory.
+#   - .animrig: a ZIP bundle containing `manifest.rig` plus
+#     `parts/<bone_name>.png` entries. Textures are extracted at
+#     import time and embedded on the resource as sprite_textures,
+#     so the runtime auto-binds without needing a separate folder.
 
 const AniRigResource := preload("res://addons/animanager/resource/ani_rig_resource.gd")
 
@@ -18,7 +26,7 @@ func _get_visible_name() -> String:
 
 
 func _get_recognized_extensions() -> PackedStringArray:
-	return PackedStringArray(["rig"])
+	return PackedStringArray(["rig", "animrig"])
 
 
 func _get_save_extension() -> String:
@@ -62,15 +70,49 @@ func _import(
 	_platform_variants: Array[String],
 	_gen_files: Array[String]
 ) -> Error:
-	var file := FileAccess.open(source_file, FileAccess.READ)
-	if file == null:
-		push_error("AniManager: could not open .rig file %s" % source_file)
-		return FAILED
-	var text := file.get_as_text()
-	file.close()
+	# Two branches: .animrig is a ZIP bundle; .rig is a bare JSON file.
+	# The bundle path additionally extracts sprite textures from
+	# parts/*.png so they're embedded on the resource — runtime
+	# auto-binds with no folder field required.
+	var manifest_text: String = ""
+	var bundled_textures := {}
+	if source_file.get_extension().to_lower() == "animrig":
+		var reader := ZIPReader.new()
+		if reader.open(source_file) != OK:
+			push_error("AniManager: could not open .animrig %s" % source_file)
+			return FAILED
+		if not reader.file_exists("manifest.rig"):
+			push_error("AniManager: .animrig missing manifest.rig entry")
+			reader.close()
+			return FAILED
+		manifest_text = reader.read_file("manifest.rig").get_string_from_utf8()
+		# Pull each parts/<bone_name>.png entry into an ImageTexture
+		# keyed by the basename (matching the bone's name). The runtime
+		# uses the same name → texture mapping the folder-based
+		# auto-bind does, so the runtime code path stays unified.
+		for entry in reader.get_files():
+			if not entry.begins_with("parts/"):
+				continue
+			if not entry.to_lower().ends_with(".png"):
+				continue
+			var png_bytes := reader.read_file(entry)
+			var img := Image.new()
+			if img.load_png_from_buffer(png_bytes) != OK:
+				push_warning("AniManager: failed to decode %s" % entry)
+				continue
+			var bone_name := entry.substr(6, entry.length() - 6 - 4)  # strip "parts/" and ".png"
+			bundled_textures[bone_name] = ImageTexture.create_from_image(img)
+		reader.close()
+	else:
+		var file := FileAccess.open(source_file, FileAccess.READ)
+		if file == null:
+			push_error("AniManager: could not open .rig file %s" % source_file)
+			return FAILED
+		manifest_text = file.get_as_text()
+		file.close()
 
 	var json := JSON.new()
-	var err := json.parse(text)
+	var err := json.parse(manifest_text)
 	if err != OK:
 		push_error("AniManager: .rig JSON parse failed: %s" % json.get_error_message())
 		return FAILED
@@ -176,6 +218,11 @@ func _import(
 			"pole_side": int(chain.get("poleSide", 1)),
 			"enabled": chain.get("enabled", true),
 		})
+
+	# Embedded textures from a .animrig bundle. Empty dict for plain
+	# .rig imports — the runtime falls back to the sprite_pack_folder
+	# field on AniAnimationPlayer2D in that case.
+	resource.sprite_textures = bundled_textures
 
 	var output_path: String = "%s.%s" % [save_path, _get_save_extension()]
 	return ResourceSaver.save(resource, output_path)

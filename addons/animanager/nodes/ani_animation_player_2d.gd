@@ -223,59 +223,72 @@ func _rebuild_indices() -> void:
 # ── Sprite pack auto-binding ───────────────────────────────────────
 
 func _auto_bind_from_sprite_pack() -> void:
-	# Walk sprite_pack_folder and, for every PNG whose basename matches
-	# a bone's name (case-sensitive), populate sprite_bindings if the
-	# user hasn't already explicitly mapped that bone. Skips silently
-	# when either input is empty so this is safe to call any time.
+	# Walk both auto-bind sources and fill sprite_bindings for every
+	# bone whose name matches a texture, skipping bones that the user
+	# has already explicitly bound. Sources (in priority order):
+	#   1. rig.sprite_textures — embedded textures from a .animrig
+	#      bundle. No filesystem traversal; texts are decoded once at
+	#      import time.
+	#   2. sprite_pack_folder — loose PNGs in the project tree
+	#      (legacy two-file .rig + sister .parts/ flow).
+	# Either can be empty; both can coexist. Skips silently when both
+	# are empty so this is safe to call any time.
 	if rig == null:
 		return
-	if sprite_pack_folder == null or sprite_pack_folder == "":
-		return
-	var dir := DirAccess.open(sprite_pack_folder)
-	if dir == null:
-		push_warning(
-			"AniManager: sprite_pack_folder %s does not exist or isn't readable"
-				% sprite_pack_folder
-		)
-		return
 
-	# Index PNGs by basename (without extension).
-	var pngs := {}
-	dir.list_dir_begin()
-	var file_name := dir.get_next()
-	while file_name != "":
-		if not dir.current_is_dir() and file_name.to_lower().ends_with(".png"):
-			var stem := file_name.substr(0, file_name.length() - 4)
-			pngs[stem] = "%s/%s" % [sprite_pack_folder.rstrip("/"), file_name]
-		file_name = dir.get_next()
-	dir.list_dir_end()
-
-	if pngs.is_empty():
-		return
-
-	# Match every bone whose name has a corresponding PNG and isn't
-	# already explicitly bound by the user.
 	var bound_count := 0
-	for bone in rig.bones:
-		var bone_name: String = bone.get("name", "")
-		if bone_name.is_empty():
-			continue
-		if sprite_bindings.has(bone_name) or sprite_bindings.has(bone.get("uuid", "")):
-			continue  # Don't clobber a user override.
-		if not pngs.has(bone_name):
-			continue
-		var tex: Texture2D = _load_png_robust(pngs[bone_name])
-		if tex == null:
-			continue
-		sprite_bindings[bone_name] = tex
-		bound_count += 1
+
+	# Source 1 — embedded bundle textures.
+	if rig.sprite_textures != null and not rig.sprite_textures.is_empty():
+		for bone in rig.bones:
+			var bone_name: String = bone.get("name", "")
+			if bone_name.is_empty():
+				continue
+			if sprite_bindings.has(bone_name) or sprite_bindings.has(bone.get("uuid", "")):
+				continue  # Don't clobber a user override.
+			var tex: Variant = rig.sprite_textures.get(bone_name)
+			if tex == null or not (tex is Texture2D):
+				continue
+			sprite_bindings[bone_name] = tex
+			bound_count += 1
+
+	# Source 2 — loose folder.
+	if sprite_pack_folder != null and sprite_pack_folder != "":
+		var dir := DirAccess.open(sprite_pack_folder)
+		if dir == null:
+			push_warning(
+				"AniManager: sprite_pack_folder %s does not exist or isn't readable"
+					% sprite_pack_folder
+			)
+		else:
+			# Index PNGs by basename (without extension).
+			var pngs := {}
+			dir.list_dir_begin()
+			var file_name := dir.get_next()
+			while file_name != "":
+				if not dir.current_is_dir() and file_name.to_lower().ends_with(".png"):
+					var stem := file_name.substr(0, file_name.length() - 4)
+					pngs[stem] = "%s/%s" % [sprite_pack_folder.rstrip("/"), file_name]
+				file_name = dir.get_next()
+			dir.list_dir_end()
+			for bone in rig.bones:
+				var bone_name: String = bone.get("name", "")
+				if bone_name.is_empty():
+					continue
+				if sprite_bindings.has(bone_name) or sprite_bindings.has(bone.get("uuid", "")):
+					continue
+				if not pngs.has(bone_name):
+					continue
+				var tex: Texture2D = _load_png_robust(pngs[bone_name])
+				if tex == null:
+					continue
+				sprite_bindings[bone_name] = tex
+				bound_count += 1
+
 	# Note: assigning a key into the existing Dictionary doesn't fire
 	# the @export setter — that's fine, we don't want recursion. The
 	# redraw is triggered by whichever caller set rig / sprite_pack_folder.
-	print(
-		"AniManager: auto-bound %d sprite(s) from %s" %
-			[bound_count, sprite_pack_folder]
-	)
+	print("AniManager: auto-bound %d sprite(s)" % bound_count)
 
 
 # Loads a PNG by path, falling back to a raw Image read when Godot's

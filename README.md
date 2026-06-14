@@ -108,21 +108,25 @@ imported `.rig` files reconnect automatically.
 
 ### Binding sprites
 
-The `.rig` format itself never includes images, but AniManager's
-"Export Rig" optionally writes a sister `<name>.parts/` directory
-next to the `.rig` containing one PNG per bone (named by bone
-name). The plugin can auto-bind from such a folder:
+AniManager exports come in two shapes — both work with this plugin:
 
-1. Drop both the `.rig` AND the `.parts/` folder into your Godot
-   project tree.
-2. On your `AniAnimationPlayer2D` node, set **Sprite Pack Folder**
-   to the imported `.parts/` folder (browse for it in the inspector).
-3. Assign the **Rig** — it'll print
-   `AniManager: auto-bound N sprite(s) from <folder>` to the
-   Output panel and fill the `sprite_bindings` dictionary.
+**Option A — `.animrig` bundle (recommended, single file).** The
+bundle is a ZIP containing the rig JSON plus every part PNG. The
+plugin extracts the textures at import time and embeds them on the
+`AniRigResource`. Drop the `.animrig` in, assign it to your node's
+**Rig** property, and sprites auto-bind on assignment. No folder
+property to set. The Output panel prints
+`AniManager: auto-bound N sprite(s)` to confirm.
 
-To override or supplement what the pack provides, set entries on
-`sprite_bindings` directly:
+**Option B — `.rig` + sister `.parts/` folder.** The original
+two-file shape — handy if you want to inspect or hand-tweak the
+PNGs in the project tree. Drop both into your project, set
+**Sprite Pack Folder** on the node to the imported `.parts/`
+folder, then assign **Rig**. Same auto-bind log line.
+
+Either flow handles the same animations identically; the bundle is
+just nicer to share. To override or supplement what auto-bind
+provides, set entries on `sprite_bindings` directly:
 
 ```gdscript
 @onready var player := $AniAnimationPlayer2D
@@ -153,7 +157,8 @@ func _process(_delta: float) -> void:
 | Property | Type | Default | What it does |
 |---|---|---|---|
 | `rig` | `AniRigResource` | `null` | The imported animation data. |
-| `sprite_bindings` | `Dictionary` | `{}` | Bone uuid/name → `Texture2D`. |
+| `sprite_bindings` | `Dictionary` | `{}` | Bone uuid/name → `Texture2D`. Explicit entries win over auto-bind. |
+| `sprite_pack_folder` | `String` (dir) | `""` | Auto-bind from PNG files in this folder. Used when the source was a bare `.rig` (no embedded textures). Bundle imports leave this empty — textures auto-bind directly off `rig.sprite_textures`. |
 | `auto_play` | `bool` | `false` | Call `play()` on `_ready()`. |
 | `speed` | `float` | `1.0` | Playback speed multiplier. |
 | `loop_override` | `int` (enum) | `-1` (use rig) | Force loop on / off, or defer to the rig's `is_looping` field. |

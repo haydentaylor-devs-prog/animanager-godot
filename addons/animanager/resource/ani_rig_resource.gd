@@ -42,3 +42,11 @@ extends Resource
 # Optional v1.1 IK chains. Each entry:
 #   child_bone_uuid, target_x, target_y, pole_side, enabled.
 @export var ik_chains: Array = []
+
+# Sprite textures embedded from a .animrig bundle, keyed by bone
+# name (matching the bundle's parts/<bone_name>.png filenames).
+# Empty when the source file was a bare .rig — in that case the
+# AniAnimationPlayer2D node reads from its sprite_pack_folder
+# property instead. Both sources can coexist; explicit
+# sprite_bindings on the node take precedence over either.
+@export var sprite_textures: Dictionary = {}
