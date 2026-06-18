@@ -12,6 +12,11 @@ extends Node2D
 
 signal animation_finished
 signal animation_looped
+# Emitted once per event entry when the playhead first crosses the
+# event's frame. `event_name` and `payload` come from the .rig file's
+# events array (spec §8.1). Multiple events at the same frame fire
+# in array order, each via its own emission of this signal.
+signal animation_event(event_name: String, payload: String)
 
 # ── Inspector properties ───────────────────────────────────────────
 
@@ -60,6 +65,11 @@ signal animation_looped
 
 var _is_playing: bool = false
 var _current_frame: float = 0.0
+# Highest integer frame the event dispatcher has fired for since the
+# last loop wrap. Initialized to -1 so frame-0 events fire on the
+# first tick of playback. Reset to -1 on every loop wrap so events
+# re-fire on the next pass.
+var _last_event_int_frame: int = -1
 
 # Built by _rebuild_indices().
 var _bone_by_uuid: Dictionary = {}            # uuid → bone Dict
@@ -159,20 +169,47 @@ func _process(delta: float) -> void:
 		return
 
 	_current_frame += delta * float(rig.frame_rate) * speed
+	var wrapped := false
 	if _current_frame >= float(rig.total_frames):
 		var loops: bool = (loop_override == 1) or (
 			loop_override == -1 and rig.is_looping
 		)
 		if loops:
 			_current_frame = fmod(_current_frame, float(rig.total_frames))
+			wrapped = true
 			emit_signal("animation_looped")
 		else:
 			_current_frame = float(rig.total_frames - 1)
 			_is_playing = false
 			emit_signal("animation_finished")
 
+	_dispatch_events(int(_current_frame), wrapped)
+
 	_evaluate_pose(_current_frame)
 	queue_redraw()
+
+
+# Emit `animation_event` for every event row whose frame is now
+# crossed by the playhead since the last tick. On a loop wrap the
+# tracker resets to -1 so events at the start of the animation fire
+# again on the next pass.
+func _dispatch_events(new_int_frame: int, wrapped: bool) -> void:
+	if rig == null or (rig.events as Array).is_empty():
+		_last_event_int_frame = new_int_frame
+		return
+	if wrapped:
+		_last_event_int_frame = -1
+	if new_int_frame <= _last_event_int_frame:
+		return
+	for ev in rig.events:
+		var f: int = int(ev.get("frame", 0))
+		if f > _last_event_int_frame and f <= new_int_frame:
+			emit_signal(
+				"animation_event",
+				String(ev.get("name", "")),
+				String(ev.get("payload", "")),
+			)
+	_last_event_int_frame = new_int_frame
 
 
 # ── Skeleton indexing ──────────────────────────────────────────────

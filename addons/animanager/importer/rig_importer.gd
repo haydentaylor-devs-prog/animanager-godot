@@ -219,6 +219,18 @@ func _import(
 			"enabled": chain.get("enabled", true),
 		})
 
+	# Frame events: optional v1.4. Flat list, multiple entries can
+	# share a frame value. Payload is stored as a plain String
+	# (possibly empty); the runtime hands it to listeners verbatim.
+	resource.events = []
+	for raw in data.get("events", []):
+		var ev: Dictionary = raw
+		resource.events.append({
+			"frame": int(ev.get("frame", 0)),
+			"name": String(ev.get("name", "")),
+			"payload": String(ev.get("payload", "")),
+		})
+
 	# Embedded textures from a .animrig bundle. Empty dict for plain
 	# .rig imports — the runtime falls back to the sprite_pack_folder
 	# field on AniAnimationPlayer2D in that case.

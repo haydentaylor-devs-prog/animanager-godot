@@ -170,6 +170,7 @@ func _process(_delta: float) -> void:
 |---|---|
 | `animation_finished` | Last frame reached on a non-looping clip. |
 | `animation_looped` | Wrap-around on a looping clip. |
+| `animation_event(name: String, payload: String)` | Playhead first crosses a frame that has an event in the `.rig` file (spec §8.1). One emission per event entry — multiple events on the same frame each get their own emit. Re-fires on every loop pass. `payload` is the empty string when the event has no payload. |
 
 | Method | What it does |
 |---|---|

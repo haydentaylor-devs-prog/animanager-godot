@@ -50,3 +50,10 @@ extends Resource
 # property instead. Both sources can coexist; explicit
 # sprite_bindings on the node take precedence over either.
 @export var sprite_textures: Dictionary = {}
+
+# Optional v1.4 frame events. Each entry is a Dictionary with:
+#   frame (int), name (String), payload (String, may be empty).
+# Multiple entries can share the same `frame` value (e.g. a single
+# attack frame fires `swing_start` AND `swooshSfx`). Stored as a
+# flat list since events keyed by frame would lose ordering.
+@export var events: Array = []
