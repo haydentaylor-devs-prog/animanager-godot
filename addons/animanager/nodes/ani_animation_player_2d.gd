@@ -14,7 +14,7 @@ signal animation_finished
 signal animation_looped
 # Emitted once per event entry when the playhead first crosses the
 # event's frame. `event_name` and `payload` come from the .rig file's
-# events array (spec §8.1). Multiple events at the same frame fire
+# events array (spec §8.3). Multiple events at the same frame fire
 # in array order, each via its own emission of this signal.
 signal animation_event(event_name: String, payload: String)
 
@@ -389,7 +389,20 @@ func _evaluate_bone_fk(uuid: String, frame: float) -> void:
 	var translate_y: float = p.translate_y
 	var scale_x: float = p.scale_x
 	var scale_y: float = p.scale_y
-	var local_rotation: float = p.rotation
+	# Zero-keyframe fallback: spec §8.1 says a bone with no keys stays
+	# in its rest pose, meaning the FK composition should use the
+	# bone's authored `rotation` field (which AniManager stores as a
+	# local delta from the parent's world rotation for non-root
+	# bones). AniPoseEvaluator.interpolate returns `0.0` for an empty
+	# frames list because it has no access to per-bone rest data —
+	# swap that here so bones without any keyframes (e.g. armor
+	# pauldrons parented to an animated arm) inherit their parent's
+	# swing instead of locking to the parent's raw axis and "flailing."
+	var local_rotation: float
+	if frames.is_empty():
+		local_rotation = float(bone.rotation)
+	else:
+		local_rotation = p.rotation
 	var scaled_length: float = float(bone.length) * ((scale_x + scale_y) * 0.5)
 
 	var parent_uuid: Variant = bone.parent_uuid
