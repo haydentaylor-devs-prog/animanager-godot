@@ -46,6 +46,19 @@ signal animation_event(event_name: String, payload: String)
 		_auto_bind_from_sprite_pack()
 		queue_redraw()
 
+# When true, the first root bone's FRAME-0 translate is treated as a
+# baseline and subtracted from its translate at every frame (and from
+# the IK-target ride-along shift). Games that move the character body
+# themselves enable this so a stray authored root offset can't sink
+# or shift one clip relative to another — RELATIVE root motion within
+# the clip (e.g. a run-cycle bob) is preserved. Default false =
+# spec-faithful playback of the file as authored.
+@export var zero_root_translate: bool = false:
+	set(value):
+		zero_root_translate = value
+		_evaluate_pose(_current_frame)
+		queue_redraw()
+
 @export var auto_play: bool = false
 @export_range(0.1, 10.0, 0.05) var speed: float = 1.0
 # -1 = use rig.is_looping; 0 = force off; 1 = force on. Lets you
@@ -361,6 +374,10 @@ func _load_png_robust(path: String) -> Texture2D:
 # animated translate keeps limbs reaching targets that ride along
 # with the body (mirrors the reference impl's target adjustment).
 var _root_translate: Vector2 = Vector2.ZERO
+# Frame-0 root translate, non-zero only when zero_root_translate —
+# subtracted from the root's translate at every frame (see the
+# export's doc comment).
+var _root_baseline: Vector2 = Vector2.ZERO
 
 
 func _evaluate_pose(frame: float) -> void:
@@ -383,11 +400,16 @@ func _evaluate_pose(frame: float) -> void:
 	# pre-IK pose — parts visibly detached whenever IK moved a limb.
 	_pose_by_uuid.clear()
 	_root_translate = Vector2.ZERO
+	_root_baseline = Vector2.ZERO
 	for root in _bone_roots:
 		var root_frames: Array = _frames_by_bone.get(root, [])
 		if not root_frames.is_empty():
 			var rp := AniPoseEvaluator.interpolate(root_frames, frame)
 			_root_translate = Vector2(rp.translate_x, rp.translate_y)
+			if zero_root_translate:
+				var rp0 := AniPoseEvaluator.interpolate(root_frames, 0.0)
+				_root_baseline = Vector2(rp0.translate_x, rp0.translate_y)
+				_root_translate -= _root_baseline
 		break
 	for root in _bone_roots:
 		_evaluate_bone_fk(root, frame, NAN)
@@ -428,6 +450,18 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 	var scale_x: float = p.scale_x
 	var scale_y: float = p.scale_y
 	var scaled_length: float = float(bone.length) * ((scale_x + scale_y) * 0.5)
+
+	# zero_root_translate: the baseline is non-zero only when enabled
+	# (see _evaluate_pose); it applies to ROOT bones only — child
+	# translates are joint offsets and stay as authored.
+	var bone_parent: Variant = bone.parent_uuid
+	var bone_is_root: bool = (
+		bone_parent == null
+		or (bone_parent is String and (bone_parent as String).is_empty())
+	)
+	if bone_is_root:
+		translate_x -= _root_baseline.x
+		translate_y -= _root_baseline.y
 
 	var parent_uuid: Variant = bone.parent_uuid
 	var has_parent: bool = (
