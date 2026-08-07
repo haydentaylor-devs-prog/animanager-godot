@@ -355,6 +355,14 @@ func _load_png_robust(path: String) -> Texture2D:
 
 # ── Pose evaluation ────────────────────────────────────────────────
 
+# First root bone's interpolated translate at the frame being
+# evaluated — cached once per _evaluate_pose pass. IK targets are
+# stored in REST sprite-local coords; shifting them by the root's
+# animated translate keeps limbs reaching targets that ride along
+# with the body (mirrors the reference impl's target adjustment).
+var _root_translate: Vector2 = Vector2.ZERO
+
+
 func _evaluate_pose(frame: float) -> void:
 	# Model mirrors BoneTransformCalculator in the AniManager source:
 	# bones are described by world start + end joints + world rotation,
@@ -362,22 +370,52 @@ func _evaluate_pose(frame: float) -> void:
 	# joint follows its parent's end joint (or start joint when
 	# connect_to_parent_start is true); the keyframe rotation is LOCAL
 	# (added to the parent's world rotation).
+	#
+	# IK is solved DURING the walk, exactly like the reference impl:
+	# when a bone hosts an enabled chain (one of its children is the
+	# chain leaf), the bone's own local rotation comes from the
+	# two-bone solver BEFORE its children compose — so every child
+	# inherits the post-IK pose: the leaf via the passed-down
+	# override, and siblings (e.g. knee-plate armor hanging off a
+	# thigh) via plain FK against the already-solved parent. The old
+	# post-pass approach re-walked only the leaf's descendants, which
+	# left the chain parent's other children composed against the
+	# pre-IK pose — parts visibly detached whenever IK moved a limb.
 	_pose_by_uuid.clear()
+	_root_translate = Vector2.ZERO
 	for root in _bone_roots:
-		_evaluate_bone_fk(root, frame)
-
-	# IK pass: solve each enabled chain, overwrite the parent's + leaf's
-	# rotation + joint positions, then re-walk the leaf's descendants
-	# so any sub-tree inherits the new orientation.
-	if rig != null:
-		for leaf_uuid in _ik_chains_by_leaf:
-			var chain: Dictionary = _ik_chains_by_leaf[leaf_uuid]
-			if not chain.get("enabled", true):
-				continue
-			_apply_ik_chain(leaf_uuid, chain, frame)
+		var root_frames: Array = _frames_by_bone.get(root, [])
+		if not root_frames.is_empty():
+			var rp := AniPoseEvaluator.interpolate(root_frames, frame)
+			_root_translate = Vector2(rp.translate_x, rp.translate_y)
+		break
+	for root in _bone_roots:
+		_evaluate_bone_fk(root, frame, NAN)
 
 
-func _evaluate_bone_fk(uuid: String, frame: float) -> void:
+# First child of [parent_uuid] that is the leaf of an enabled IK
+# chain — the reference impl hosts at most one chain per parent.
+func _outgoing_chain_child(parent_uuid: String) -> String:
+	for child_uuid in _bone_children.get(parent_uuid, []):
+		var chain: Variant = _ik_chains_by_leaf.get(child_uuid)
+		if chain != null and bool((chain as Dictionary).get("enabled", true)):
+			return child_uuid
+	return ""
+
+
+# Mirror of the app's Bone.constrainRotation: clamp the LOCAL
+# rotation to [min_rotation, max_rotation]; a null bound is open.
+func _constrain_rotation(bone: Dictionary, value: float) -> float:
+	var mn: Variant = bone.get("min_rotation")
+	if mn != null and value < float(mn):
+		return float(mn)
+	var mx: Variant = bone.get("max_rotation")
+	if mx != null and value > float(mx):
+		return float(mx)
+	return value
+
+
+func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NAN) -> void:
 	var bone: Dictionary = _bone_by_uuid.get(uuid, {})
 	if bone.is_empty():
 		return
@@ -389,20 +427,6 @@ func _evaluate_bone_fk(uuid: String, frame: float) -> void:
 	var translate_y: float = p.translate_y
 	var scale_x: float = p.scale_x
 	var scale_y: float = p.scale_y
-	# Zero-keyframe fallback: spec §8.1 says a bone with no keys stays
-	# in its rest pose, meaning the FK composition should use the
-	# bone's authored `rotation` field (which AniManager stores as a
-	# local delta from the parent's world rotation for non-root
-	# bones). AniPoseEvaluator.interpolate returns `0.0` for an empty
-	# frames list because it has no access to per-bone rest data —
-	# swap that here so bones without any keyframes (e.g. armor
-	# pauldrons parented to an animated arm) inherit their parent's
-	# swing instead of locking to the parent's raw axis and "flailing."
-	var local_rotation: float
-	if frames.is_empty():
-		local_rotation = float(bone.rotation)
-	else:
-		local_rotation = p.rotation
 	var scaled_length: float = float(bone.length) * ((scale_x + scale_y) * 0.5)
 
 	var parent_uuid: Variant = bone.parent_uuid
@@ -457,7 +481,60 @@ func _evaluate_bone_fk(uuid: String, frame: float) -> void:
 		)
 		parent_base_rotation = 0.0
 
-	# Step 2: world rotation. For root bones the keyframe value IS
+	# Step 2: local rotation. Priority mirrors the reference impl:
+	#   (a) IK override passed down from the chain parent (we're the
+	#       chain leaf this pass)
+	#   (b) we host an enabled outgoing chain — solve two-bone IK now,
+	#       BEFORE our children compose
+	#   (c) interpolated keyframe rotation
+	#   (d) zero-keyframe rest fallback (spec §8.1): a bone with no
+	#       keys stays in its rest pose, so use the authored local
+	#       `rotation` (e.g. armor pauldrons parented to an animated
+	#       arm ride the parent's swing instead of flailing)
+	var ik_child_uuid := ""
+	var ik_child_local := 0.0
+	var local_rotation: float
+	if not is_nan(ik_local_override):
+		local_rotation = ik_local_override
+	else:
+		# Root bones with rootJointAtStart=false can't host IK — their
+		# start position depends on the rotation being solved for.
+		var can_host_ik: bool = has_parent or bool(bone.root_joint_at_start)
+		var chain_child := ""
+		if can_host_ik:
+			chain_child = _outgoing_chain_child(uuid)
+		if chain_child != "":
+			var chain: Dictionary = _ik_chains_by_leaf[chain_child]
+			var child_bone: Dictionary = _bone_by_uuid[chain_child]
+			# Target: per-frame ikTargetX/Y on the leaf's keyframes
+			# (interpolated) when present, else the chain's rest
+			# target; either way shifted by the root's animated
+			# translate so the target rides along with the body.
+			var target := Vector2(float(chain.target_x), float(chain.target_y))
+			var leaf_frames: Array = _frames_by_bone.get(chain_child, [])
+			var interp := AniPoseEvaluator.interpolate(leaf_frames, frame)
+			if not is_nan(interp.ik_target_x):
+				target.x = interp.ik_target_x
+			if not is_nan(interp.ik_target_y):
+				target.y = interp.ik_target_y
+			target += _root_translate
+			var pole_side: int = int(chain.get("pole_side", 1))
+			var rotations: Vector2 = AniPoseEvaluator.solve_two_bone_ik(
+				world_start, scaled_length, float(child_bone.length), target, pole_side
+			)
+			# Parent's local is clamped by its own constraints; the
+			# leaf's local is measured against the UNclamped parent
+			# world rotation (reference-impl trade-off: a clamped
+			# parent means the leaf won't perfectly reach the target).
+			local_rotation = _constrain_rotation(bone, rotations.x - parent_base_rotation)
+			ik_child_uuid = chain_child
+			ik_child_local = _constrain_rotation(child_bone, rotations.y - rotations.x)
+		elif frames.is_empty():
+			local_rotation = float(bone.rotation)
+		else:
+			local_rotation = p.rotation
+
+	# Step 3: world rotation. For root bones the keyframe value IS
 	# the world rotation; for descendants it's added on top of the
 	# parent base.
 	var world_rotation: float
@@ -494,72 +571,10 @@ func _evaluate_bone_fk(uuid: String, frame: float) -> void:
 	}
 
 	for child_uuid in _bone_children.get(uuid, []):
-		_evaluate_bone_fk(child_uuid, frame)
-
-
-func _apply_ik_chain(leaf_uuid: String, chain: Dictionary, frame: float) -> void:
-	var leaf: Dictionary = _bone_by_uuid.get(leaf_uuid, {})
-	if leaf.is_empty():
-		return
-	var parent_uuid: Variant = leaf.parent_uuid
-	if (
-		parent_uuid == null
-		or (parent_uuid is String and (parent_uuid as String).is_empty())
-	):
-		return  # Two-bone IK needs a parent above the leaf.
-	var parent_pose: Dictionary = _pose_by_uuid.get(parent_uuid, {})
-	if parent_pose.is_empty():
-		return
-
-	# Target: prefer the per-frame ikTargetX/Y on the leaf's keyframes
-	# (interpolated), else fall back to the chain's rest target.
-	var leaf_frames: Array = _frames_by_bone.get(leaf_uuid, [])
-	var interp := AniPoseEvaluator.interpolate(leaf_frames, frame)
-	var target := Vector2(chain.target_x, chain.target_y)
-	if not is_nan(interp.ik_target_x):
-		target.x = interp.ik_target_x
-	if not is_nan(interp.ik_target_y):
-		target.y = interp.ik_target_y
-
-	# Shoulder = the chain parent's world START joint (the joint
-	# closest to the rest of the body that doesn't move with IK).
-	var shoulder: Vector2 = parent_pose.world_start
-	var l1: float = float(parent_pose.scaled_length)
-	var l2: float = float(_pose_by_uuid.get(leaf_uuid, {"scaled_length": float(leaf.length)}).scaled_length)
-	var pole_side: int = int(chain.get("pole_side", 1))
-	var rotations: Vector2 = AniPoseEvaluator.solve_two_bone_ik(
-		shoulder, l1, l2, target, pole_side
-	)
-	var parent_world_rotation: float = rotations.x
-	var leaf_world_rotation: float = rotations.y
-
-	# Rebuild the parent's pose: shoulder stays put; end follows the
-	# new rotation.
-	var parent_end := shoulder + Vector2(
-		l1 * cos(parent_world_rotation), l1 * sin(parent_world_rotation)
-	)
-	_pose_by_uuid[parent_uuid] = {
-		"world_start": shoulder,
-		"world_end": parent_end,
-		"world_rotation": parent_world_rotation,
-		"scaled_length": l1,
-	}
-
-	# Leaf starts at the parent's new end joint, extends along the
-	# leaf rotation.
-	var leaf_end := parent_end + Vector2(
-		l2 * cos(leaf_world_rotation), l2 * sin(leaf_world_rotation)
-	)
-	_pose_by_uuid[leaf_uuid] = {
-		"world_start": parent_end,
-		"world_end": leaf_end,
-		"world_rotation": leaf_world_rotation,
-		"scaled_length": l2,
-	}
-
-	# Re-walk descendants of the leaf so they inherit the new orientation.
-	for child_uuid in _bone_children.get(leaf_uuid, []):
-		_evaluate_bone_fk(child_uuid, frame)
+		var child_override := NAN
+		if child_uuid == ik_child_uuid:
+			child_override = ik_child_local
+		_evaluate_bone_fk(child_uuid, frame, child_override)
 
 
 # ── Drawing ────────────────────────────────────────────────────────
@@ -590,6 +605,13 @@ func _draw() -> void:
 		draw_order.append({"uuid": uuid, "key": sort_key})
 	draw_order.sort_custom(func(a, b): return int(a.key) < int(b.key))
 
+	# Debug skeleton lines are a diagnostic view, not a fallback per
+	# bone: draw them only when NOTHING is bound (the "did my rig
+	# load?" case) or when the editor explicitly asks. A rigged
+	# character always has structural helper bones with no part
+	# (shoulder/hip connectors) — drawing debug for just those painted
+	# stray joints/lines over the finished art in-game.
+	var any_bound := not sprite_bindings.is_empty()
 	for entry in draw_order:
 		var uuid: String = entry.uuid
 		var bone: Dictionary = _bone_by_uuid[uuid]
@@ -599,7 +621,10 @@ func _draw() -> void:
 		var texture: Texture2D = _texture_for_bone(uuid, bone)
 		if texture != null:
 			_draw_bone_sprite(bone, pose, texture)
-		elif draw_bones_in_editor or not Engine.is_editor_hint():
+		elif (
+			not any_bound
+			or (Engine.is_editor_hint() and draw_bones_in_editor)
+		):
 			_draw_bone_debug(pose)
 
 
@@ -675,10 +700,31 @@ func _draw_bone_sprite_v1_2(
 	var body_rect := Rect2(-pivot_px, Vector2(part_w, part_h))
 
 	var xf := Transform2D(part_world_rotation, pivot_world)
+	if bone.part_flip_y:
+		# Mirror across the BONE AXIS through the bone's start joint —
+		# the app's Flip Part semantics (re-use one asset on both body
+		# sides; the limb direction is preserved, only the cross-
+		# section flips). A naive local Y-flip about the part pivot
+		# mirrors about the wrong line entirely. Mirrors the reference
+		# math in bone_canvas._drawParts.
+		var cos_f := cos(part_world_rotation)
+		var sin_f := sin(part_world_rotation)
+		var bs_pre_x := -(rot_rest_off_x + rot_part_off_x)
+		var bs_pre_y := -(rot_rest_off_y + rot_part_off_y)
+		var bs := Vector2(
+			bs_pre_x * cos_f + bs_pre_y * sin_f,
+			-bs_pre_x * sin_f + bs_pre_y * cos_f,
+		)
+		var bone_angle_in_frame := (
+			float(bone.rest_world_rotation) - float(bone.part_rotation_offset)
+		)
+		xf = xf.translated_local(bs)
+		xf = xf.rotated_local(bone_angle_in_frame)
+		xf = xf.scaled_local(Vector2(1.0, -1.0))
+		xf = xf.rotated_local(-bone_angle_in_frame)
+		xf = xf.translated_local(-bs)
 	if bone.part_flip_x:
 		xf = xf.scaled_local(Vector2(-1.0, 1.0))
-	if bone.part_flip_y:
-		xf = xf.scaled_local(Vector2(1.0, -1.0))
 
 	draw_set_transform_matrix(xf)
 	draw_texture_rect(texture, body_rect, false)
