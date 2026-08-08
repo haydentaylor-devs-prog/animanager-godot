@@ -51,6 +51,16 @@ extends Resource
 # sprite_bindings on the node take precedence over either.
 @export var sprite_textures: Dictionary = {}
 
+# Shade-mask sidecars (spec v1.6 §2.3), keyed by bone name like
+# sprite_textures. material_textures holds the raw material masks
+# (R=metal, G=lit, B=emissive, black=flat); normal_textures holds
+# the tangent-space normal maps AniMate baked from the height map
+# at export (Y-down, +Z out, flat = 128/128/255). Both empty for
+# pre-v1.6 rigs or parts authored without the Shade tool — the
+# runtime falls back to unshaded drawing per part.
+@export var material_textures: Dictionary = {}
+@export var normal_textures: Dictionary = {}
+
 # Optional v1.4 frame events. Each entry is a Dictionary with:
 #   frame (int), name (String), payload (String, may be empty).
 # Multiple entries can share the same `frame` value (e.g. a single

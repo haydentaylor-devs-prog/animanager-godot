@@ -76,6 +76,8 @@ func _import(
 	# auto-binds with no folder field required.
 	var manifest_text: String = ""
 	var bundled_textures := {}
+	var bundled_materials := {}
+	var bundled_normals := {}
 	if source_file.get_extension().to_lower() == "animrig":
 		var reader := ZIPReader.new()
 		if reader.open(source_file) != OK:
@@ -90,6 +92,9 @@ func _import(
 		# keyed by the basename (matching the bone's name). The runtime
 		# uses the same name → texture mapping the folder-based
 		# auto-bind does, so the runtime code path stays unified.
+		# Since spec v1.6 the pack may also carry shade-mask sidecars —
+		# parts/<bone_name>.material.png and parts/<bone_name>.normal.png
+		# (§2.3) — routed into their own dicts keyed by bone name.
 		for entry in reader.get_files():
 			if not entry.begins_with("parts/"):
 				continue
@@ -100,8 +105,14 @@ func _import(
 			if img.load_png_from_buffer(png_bytes) != OK:
 				push_warning("AniManager: failed to decode %s" % entry)
 				continue
-			var bone_name := entry.substr(6, entry.length() - 6 - 4)  # strip "parts/" and ".png"
-			bundled_textures[bone_name] = ImageTexture.create_from_image(img)
+			var stem := entry.substr(6, entry.length() - 6 - 4)  # strip "parts/" and ".png"
+			var tex := ImageTexture.create_from_image(img)
+			if stem.to_lower().ends_with(".material"):
+				bundled_materials[stem.substr(0, stem.length() - 9)] = tex
+			elif stem.to_lower().ends_with(".normal"):
+				bundled_normals[stem.substr(0, stem.length() - 7)] = tex
+			else:
+				bundled_textures[stem] = tex
 		reader.close()
 	else:
 		var file := FileAccess.open(source_file, FileAccess.READ)
@@ -235,6 +246,8 @@ func _import(
 	# .rig imports — the runtime falls back to the sprite_pack_folder
 	# field on AniAnimationPlayer2D in that case.
 	resource.sprite_textures = bundled_textures
+	resource.material_textures = bundled_materials
+	resource.normal_textures = bundled_normals
 
 	var output_path: String = "%s.%s" % [save_path, _get_save_extension()]
 	return ResourceSaver.save(resource, output_path)

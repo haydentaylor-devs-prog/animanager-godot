@@ -9,6 +9,18 @@ extends Node2D
 # When sprite_bindings is empty (no bones bound to textures), the
 # node draws the skeleton as debug line segments instead — useful
 # for verifying the rig loaded correctly before wiring sprites.
+#
+# SHADED MODE (spec v1.6): with `shaded` on, every v1.2 bone with a
+# texture gets a child Sprite2D carrying its own ShaderMaterial
+# (ani_shaded_part.gdshader) fed by the rig's shade-mask sidecars —
+# material mask (metal/lit/emissive/flat) + baked normal map. Parts
+# without sidecars render as plain albedo through the same shader.
+# The game drives `light_direction`; `matcap` falls back to a
+# procedural chrome sphere when unset.
+
+const SHADED_PART_SHADER := preload(
+	"res://addons/animanager/shaders/ani_shaded_part.gdshader"
+)
 
 signal animation_finished
 signal animation_looped
@@ -25,6 +37,7 @@ signal animation_event(event_name: String, payload: String)
 		rig = value
 		_rebuild_indices()
 		_auto_bind_from_sprite_pack()
+		_rebuild_shaded_children()
 		_evaluate_pose(_current_frame)
 		queue_redraw()
 
@@ -33,6 +46,7 @@ signal animation_event(event_name: String, payload: String)
 @export var sprite_bindings: Dictionary = {}:
 	set(value):
 		sprite_bindings = value
+		_rebuild_shaded_children()
 		queue_redraw()
 
 # Optional path to a folder of PNGs named by bone name (matching what
@@ -44,7 +58,37 @@ signal animation_event(event_name: String, payload: String)
 	set(value):
 		sprite_pack_folder = value
 		_auto_bind_from_sprite_pack()
+		_rebuild_shaded_children()
 		queue_redraw()
+
+# ── Shading (spec v1.6) ────────────────────────────────────────────
+
+@export_group("Shading")
+# When on, bound v1.2 parts render through child Sprite2Ds with the
+# shaded-part shader instead of plain draw calls. Legacy (pre-v1.2)
+# bones keep the unshaded draw path even when this is on.
+@export var shaded: bool = false:
+	set(value):
+		shaded = value
+		_rebuild_shaded_children()
+		queue_redraw()
+
+# Lit-metal-sphere image sampled by the metal bucket. Leave unset to
+# use a built-in procedural chrome matcap.
+@export var matcap: Texture2D:
+	set(value):
+		matcap = value
+		_apply_shading_uniforms()
+
+# World-space light direction fed to every part material. Y-down to
+# match the canvas (negative y = light from above), z toward the
+# viewer. Games animate this via set_light_direction().
+@export var light_direction: Vector3 = Vector3(0.35, -0.55, 0.75):
+	set(value):
+		light_direction = value
+		_apply_shading_uniforms()
+
+@export_group("")
 
 # When true, the first root bone's FRAME-0 translate is treated as a
 # baseline and subtracted from its translate at every frame (and from
@@ -102,6 +146,11 @@ var _ik_chains_by_leaf: Dictionary = {}       # leaf_uuid → chain Dict
 # world_start (or world_end for bones with rootJointAtStart=false).
 var _pose_by_uuid: Dictionary = {}
 
+# Shaded mode: bone uuid → child Sprite2D (transient, never saved
+# into the scene). Rebuilt whenever rig / bindings / shaded change.
+var _shaded_sprites: Dictionary = {}
+var _fallback_matcap: ImageTexture = null
+
 
 # ── Public playback API ────────────────────────────────────────────
 
@@ -158,6 +207,29 @@ func get_bone_world_transform(bone_uuid_or_name: String) -> Transform2D:
 	if pose.is_empty():
 		return Transform2D.IDENTITY
 	return Transform2D(float(pose.world_rotation), Vector2(pose.world_start))
+
+
+func set_light_direction(dir: Vector3) -> void:
+	# Convenience for game code that animates the light (e.g. a torch
+	# passing by). Same as assigning light_direction.
+	light_direction = dir
+
+
+func get_part_material(bone_uuid_or_name: String) -> ShaderMaterial:
+	# The shaded child's per-part material, for games that want to
+	# tweak uniforms beyond matcap/light (rim color, emissive energy,
+	# metalness scaler...). Null when shaded mode is off or the bone
+	# has no shaded child.
+	var sprite: Variant = _shaded_sprites.get(bone_uuid_or_name)
+	if sprite == null:
+		for uuid in _shaded_sprites:
+			var bone: Dictionary = _bone_by_uuid.get(uuid, {})
+			if bone.get("name", "") == bone_uuid_or_name:
+				sprite = _shaded_sprites[uuid]
+				break
+	if sprite == null or not is_instance_valid(sprite):
+		return null
+	return (sprite as Sprite2D).material as ShaderMaterial
 
 
 # ── Lifecycle ──────────────────────────────────────────────────────
@@ -366,6 +438,160 @@ func _load_png_robust(path: String) -> Texture2D:
 	return ImageTexture.create_from_image(img)
 
 
+# ── Shaded children (spec v1.6) ────────────────────────────────────
+
+func _rebuild_shaded_children() -> void:
+	# Tear down and (when shaded) respawn one child Sprite2D per
+	# bound v1.2 bone. Children are transient: no owner is set, so
+	# they never serialize into the user's scene file.
+	for sprite in _shaded_sprites.values():
+		if is_instance_valid(sprite):
+			sprite.queue_free()
+	_shaded_sprites.clear()
+	if not shaded or rig == null:
+		return
+
+	for bone in rig.bones:
+		var uuid: String = bone.get("uuid", "")
+		if uuid.is_empty():
+			continue
+		# Legacy rigs without part-render hints keep the unshaded
+		# _draw path — their placement math doesn't transplant onto a
+		# child transform cleanly, and pre-v1.2 rigs predate masks
+		# anyway.
+		if bone.get("part_rest_offset_x") == null:
+			continue
+		var texture: Texture2D = _texture_for_bone(uuid, bone)
+		if texture == null:
+			continue
+
+		var sprite := Sprite2D.new()
+		var part_label := String(bone.get("name", uuid))
+		sprite.name = "AniShadedPart_%s" % part_label.validate_node_name()
+		sprite.texture = texture
+		sprite.centered = false
+		sprite.offset = -_part_pivot_px(bone)
+
+		var mat := ShaderMaterial.new()
+		mat.shader = SHADED_PART_SHADER
+		var shade := _shade_textures_for_bone(bone)
+		if shade.material != null:
+			mat.set_shader_parameter("material_mask", shade.material)
+		if shade.normal != null:
+			mat.set_shader_parameter("normal_map", shade.normal)
+		mat.set_shader_parameter(
+			"matcap", matcap if matcap != null else _get_fallback_matcap()
+		)
+		mat.set_shader_parameter("light_dir", light_direction)
+		sprite.material = mat
+
+		add_child(sprite)
+		_shaded_sprites[uuid] = sprite
+
+	_update_shaded_children()
+
+
+func _update_shaded_children() -> void:
+	# Per-frame: move each child onto its bone. Same placement math
+	# as the unshaded draw path (shared _part_transform_v1_2).
+	if _shaded_sprites.is_empty():
+		return
+	for uuid in _shaded_sprites:
+		var sprite: Sprite2D = _shaded_sprites[uuid]
+		if not is_instance_valid(sprite):
+			continue
+		var pose: Dictionary = _pose_by_uuid.get(uuid, {})
+		if pose.is_empty():
+			sprite.visible = false
+			continue
+		var bone: Dictionary = _bone_by_uuid.get(uuid, {})
+		sprite.visible = true
+		sprite.transform = _part_transform_v1_2(bone, pose)
+		sprite.z_index = clampi(_sort_key_for_bone(uuid, bone), -4096, 4096)
+
+
+func _apply_shading_uniforms() -> void:
+	# Push matcap + light_dir to every part material. Cheap enough to
+	# run per-frame when a game animates the light.
+	if _shaded_sprites.is_empty():
+		return
+	var cap: Texture2D = matcap if matcap != null else _get_fallback_matcap()
+	for sprite in _shaded_sprites.values():
+		if not is_instance_valid(sprite):
+			continue
+		var mat := (sprite as Sprite2D).material as ShaderMaterial
+		if mat == null:
+			continue
+		mat.set_shader_parameter("matcap", cap)
+		mat.set_shader_parameter("light_dir", light_direction)
+
+
+func _shade_textures_for_bone(bone: Dictionary) -> Dictionary:
+	# Sidecar lookup, mirroring the part-texture sources: embedded
+	# bundle dicts first, then loose <folder>/<bone>.material.png /
+	# .normal.png next to the sprite pack. Missing entries stay null —
+	# the shader's defaults render such parts as plain albedo.
+	var bone_name: String = bone.get("name", "")
+	var out := {"material": null, "normal": null}
+	if bone_name.is_empty():
+		return out
+	if rig != null:
+		var m: Variant = rig.material_textures.get(bone_name)
+		if m is Texture2D:
+			out.material = m
+		var n: Variant = rig.normal_textures.get(bone_name)
+		if n is Texture2D:
+			out.normal = n
+	if sprite_pack_folder != null and sprite_pack_folder != "":
+		var base := "%s/%s" % [sprite_pack_folder.rstrip("/"), bone_name]
+		if out.material == null:
+			out.material = _load_sidecar_png(base + ".material.png")
+		if out.normal == null:
+			out.normal = _load_sidecar_png(base + ".normal.png")
+	return out
+
+
+func _load_sidecar_png(path: String) -> Texture2D:
+	# Existence-gated wrapper so missing sidecars (the common case)
+	# don't spam load errors.
+	if not ResourceLoader.exists(path) and not FileAccess.file_exists(path):
+		return null
+	return _load_png_robust(path)
+
+
+func _get_fallback_matcap() -> Texture2D:
+	# Procedural chrome sphere so shaded mode works with zero assets:
+	# diffuse + tight specular hotspot + rim fresnel, generated once.
+	if _fallback_matcap != null:
+		return _fallback_matcap
+	var n := 128
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	var c := float(n) * 0.5
+	var lv := Vector3(-0.35, -0.5, 0.6).normalized()
+	var steel := Vector3(0.42, 0.46, 0.52)
+	for y in n:
+		for x in n:
+			var u := (float(x) - c) / c
+			var v := (float(y) - c) / c
+			var r2 := u * u + v * v
+			if r2 > 1.0:
+				img.set_pixel(x, y, Color(0, 0, 0, 1))
+				continue
+			var nrm := Vector3(u, v, sqrt(1.0 - r2))
+			var diff: float = maxf(nrm.dot(lv), 0.0)
+			var refl := nrm * (2.0 * nrm.dot(lv)) - lv
+			var spec: float = pow(maxf(refl.z, 0.0), 24.0)
+			var fres: float = pow(1.0 - nrm.z, 3.0) * 0.3
+			var col := steel * (0.28 + 0.72 * diff)
+			col += Vector3(1, 1, 1) * spec * 0.9
+			col += Vector3(0.8, 0.88, 1.0) * fres
+			img.set_pixel(x, y, Color(
+				clampf(col.x, 0, 1), clampf(col.y, 0, 1), clampf(col.z, 0, 1), 1.0
+			))
+	_fallback_matcap = ImageTexture.create_from_image(img)
+	return _fallback_matcap
+
+
 # ── Pose evaluation ────────────────────────────────────────────────
 
 # First root bone's interpolated translate at the frame being
@@ -413,6 +639,7 @@ func _evaluate_pose(frame: float) -> void:
 		break
 	for root in _bone_roots:
 		_evaluate_bone_fk(root, frame, NAN)
+	_update_shaded_children()
 
 
 # First child of [parent_uuid] that is the leaf of an enabled IK
@@ -622,21 +849,7 @@ func _draw() -> void:
 	var draw_order: Array = []
 	for uuid in _bone_by_uuid:
 		var bone: Dictionary = _bone_by_uuid[uuid]
-		# Sort key priority: per-frame keyframe override > part's
-		# base sortOrder (v1.2) > bone.sort_order (legacy fallback).
-		# Bone.sort_order is bone-list ordering and gets parts
-		# wrong whenever the artist set part.sortOrder independently
-		# (e.g. both arms on top of chest because all bones share
-		# sort_order = 0 but the parts have distinct values).
-		var part_sort: Variant = _interpolated_part_sort_order(uuid)
-		var sort_key: int
-		if part_sort != null:
-			sort_key = int(part_sort)
-		elif bone.get("part_base_sort_order") != null:
-			sort_key = int(bone.part_base_sort_order)
-		else:
-			sort_key = int(bone.sort_order)
-		draw_order.append({"uuid": uuid, "key": sort_key})
+		draw_order.append({"uuid": uuid, "key": _sort_key_for_bone(uuid, bone)})
 	draw_order.sort_custom(func(a, b): return int(a.key) < int(b.key))
 
 	# Debug skeleton lines are a diagnostic view, not a fallback per
@@ -652,6 +865,8 @@ func _draw() -> void:
 		var pose: Dictionary = _pose_by_uuid.get(uuid, {})
 		if pose.is_empty():
 			continue
+		if _shaded_sprites.has(uuid):
+			continue  # Rendered by its shaded child Sprite2D.
 		var texture: Texture2D = _texture_for_bone(uuid, bone)
 		if texture != null:
 			_draw_bone_sprite(bone, pose, texture)
@@ -660,6 +875,22 @@ func _draw() -> void:
 			or (Engine.is_editor_hint() and draw_bones_in_editor)
 		):
 			_draw_bone_debug(pose)
+
+
+func _sort_key_for_bone(uuid: String, bone: Dictionary) -> int:
+	# Sort key priority: per-frame keyframe override > part's base
+	# sortOrder (v1.2) > bone.sort_order (legacy fallback).
+	# Bone.sort_order is bone-list ordering and gets parts wrong
+	# whenever the artist set part.sortOrder independently (e.g. both
+	# arms on top of chest because all bones share sort_order = 0 but
+	# the parts have distinct values). Shared by the unshaded draw
+	# order and the shaded children's z_index.
+	var part_sort: Variant = _interpolated_part_sort_order(uuid)
+	if part_sort != null:
+		return int(part_sort)
+	if bone.get("part_base_sort_order") != null:
+		return int(bone.part_base_sort_order)
+	return int(bone.sort_order)
 
 
 func _texture_for_bone(uuid: String, bone: Dictionary) -> Texture2D:
@@ -696,9 +927,36 @@ func _draw_bone_sprite(
 func _draw_bone_sprite_v1_2(
 	bone: Dictionary, pose: Dictionary, texture: Texture2D
 ) -> void:
-	# Delta between current world rotation and rest world rotation —
-	# this is what rotates the stored bone-local rest offset into the
-	# current frame's world space.
+	# The bodyRect is drawn with the part's pivot at the origin of its
+	# own local coords — so pixels above/left of the pivot have
+	# negative coords, pixels below/right have positive. This is what
+	# makes draw_set_transform_matrix(world, rotation) put the pivot
+	# at pivot_world automatically. The shaded-children path shares
+	# the same math: Sprite2D with centered=false, offset=-pivot_px,
+	# transform=_part_transform_v1_2.
+	var pivot_px := _part_pivot_px(bone)
+	var body_rect := Rect2(
+		-pivot_px,
+		Vector2(float(bone.part_width), float(bone.part_height)),
+	)
+	draw_set_transform_matrix(_part_transform_v1_2(bone, pose))
+	draw_texture_rect(texture, body_rect, false)
+	draw_set_transform_matrix(Transform2D.IDENTITY)
+
+
+func _part_pivot_px(bone: Dictionary) -> Vector2:
+	return Vector2(
+		float(bone.part_width) * float(bone.part_pivot_x),
+		float(bone.part_height) * float(bone.part_pivot_y),
+	)
+
+
+func _part_transform_v1_2(bone: Dictionary, pose: Dictionary) -> Transform2D:
+	# Spec §10.3 placement for v1.2 rigs: pivot-anchored, with the
+	# bone-local rest offset rotated by the delta between current and
+	# rest world rotation. Mirrors puppet_view._computePlacement in
+	# the AniManager source, so sprites land where the artist saw
+	# them on the tablet.
 	var delta := float(pose.world_rotation) - float(bone.rest_world_rotation)
 	var cos_d := cos(delta)
 	var sin_d := sin(delta)
@@ -719,19 +977,6 @@ func _draw_bone_sprite_v1_2(
 	)
 
 	var part_world_rotation := delta + float(bone.part_rotation_offset)
-
-	# The bodyRect is drawn with the part's pivot at the origin of its
-	# own local coords — so pixels above/left of the pivot have
-	# negative coords, pixels below/right have positive. This is what
-	# makes draw_set_transform_matrix(world, rotation) put the pivot
-	# at pivot_world automatically.
-	var part_w := float(bone.part_width)
-	var part_h := float(bone.part_height)
-	var pivot_px := Vector2(
-		part_w * float(bone.part_pivot_x),
-		part_h * float(bone.part_pivot_y),
-	)
-	var body_rect := Rect2(-pivot_px, Vector2(part_w, part_h))
 
 	var xf := Transform2D(part_world_rotation, pivot_world)
 	if bone.part_flip_y:
@@ -759,10 +1004,7 @@ func _draw_bone_sprite_v1_2(
 		xf = xf.translated_local(-bs)
 	if bone.part_flip_x:
 		xf = xf.scaled_local(Vector2(-1.0, 1.0))
-
-	draw_set_transform_matrix(xf)
-	draw_texture_rect(texture, body_rect, false)
-	draw_set_transform_matrix(Transform2D.IDENTITY)
+	return xf
 
 
 func _draw_bone_sprite_legacy(

@@ -29,10 +29,20 @@ Godot game project.
 - **Binds sprites to bones** via a simple `Dictionary` (bone UUID
   or bone name → `Texture2D`).
 - **Supports IK** (the v1.1 `ikChains` extension) — two-bone
-  analytic solver runs after FK each frame.
+  analytic solver runs during the FK walk each frame.
 - **Honors all interpolation types** the spec defines: linear,
   ease in / out / in-out, stepped, custom cubic bezier (with
   Newton-Raphson `x → t` solver matching the AniManager reference).
+- **Shaded mode** (the v1.6 shade-mask sidecars): set `shaded = true`
+  and every bound part renders through its own `ShaderMaterial` —
+  metal pixels get a matcap reflection, lit pixels get normal-mapped
+  diffuse from the baked normal map, emissive pixels glow, flat
+  pixels stay exactly as painted. Masks auto-bind from the
+  `.animrig` bundle (or `<bone>.material.png` / `<bone>.normal.png`
+  files next to a loose sprite pack); parts without masks render as
+  plain albedo. Drive `light_direction` from your game for a moving
+  light; supply a `matcap` texture or use the built-in chrome
+  fallback.
 
 ---
 
@@ -159,6 +169,9 @@ func _process(_delta: float) -> void:
 | `rig` | `AniRigResource` | `null` | The imported animation data. |
 | `sprite_bindings` | `Dictionary` | `{}` | Bone uuid/name → `Texture2D`. Explicit entries win over auto-bind. |
 | `sprite_pack_folder` | `String` (dir) | `""` | Auto-bind from PNG files in this folder. Used when the source was a bare `.rig` (no embedded textures). Bundle imports leave this empty — textures auto-bind directly off `rig.sprite_textures`. |
+| `shaded` | `bool` | `false` | Render bound v1.2 parts through per-part shaded materials (v1.6 shade masks). Pre-v1.2 bones keep the plain draw path. |
+| `matcap` | `Texture2D` | `null` | Lit-metal-sphere image for the metal bucket. Unset = built-in procedural chrome. |
+| `light_direction` | `Vector3` | `(0.35, -0.55, 0.75)` | World-space light for the lit bucket (y-down; negative y = from above). |
 | `auto_play` | `bool` | `false` | Call `play()` on `_ready()`. |
 | `speed` | `float` | `1.0` | Playback speed multiplier. |
 | `loop_override` | `int` (enum) | `-1` (use rig) | Force loop on / off, or defer to the rig's `is_looping` field. |
@@ -181,12 +194,14 @@ func _process(_delta: float) -> void:
 | `get_current_frame()` | Current playhead (float — sub-frame is fine). |
 | `set_current_frame(frame)` | Scrub to a specific frame. |
 | `get_bone_world_transform(uuid_or_name)` | World `Transform2D` of a bone — for game-side effect attachment. |
+| `set_light_direction(dir)` | Update the shaded-mode light (same as assigning `light_direction`). |
+| `get_part_material(uuid_or_name)` | The shaded child's `ShaderMaterial`, for per-part uniform tweaks (rim, emissive energy, metalness). Null when shaded mode is off. |
 
 ---
 
 ## Limitations
 
-This plugin implements the v1.1 of the
+This plugin implements v1.6 of the
 [`.rig` spec](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md):
 
 | Feature | Status |
@@ -199,7 +214,8 @@ This plugin implements the v1.1 of the
 | Two-bone analytic IK | ✅ Including per-frame `ikTargetX/Y` interpolation. |
 | Per-frame audio clips with trim + envelope | ❌ Not in spec v1. Pending v2. |
 | Image asset embedding | ❌ Not in spec, by design. Caller binds sprites. |
-| `min_rotation` / `max_rotation` constraints | ⚠ Stored, not enforced. Pending. |
+| `min_rotation` / `max_rotation` constraints | ✅ Clamped during the FK/IK walk (spec v1.5 semantics). |
+| Shade-mask sidecars (v1.6 `<bone>.material.png` / `<bone>.normal.png`) | ✅ Shaded mode (`shaded = true`); parts without masks fall back to plain albedo. |
 
 The pose evaluator and IK solver are pure GDScript. For a typical
 animation (~10-30 bones, ~3-5 IK chains, 60 fps playback) this is
