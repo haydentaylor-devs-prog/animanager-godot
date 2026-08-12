@@ -33,6 +33,11 @@ uniform sampler2D material_mask : hint_default_black, filter_nearest;
 uniform sampler2D matcap : hint_default_white, filter_linear;
 uniform vec3 light_dir = vec3(0.35, -0.55, 0.75);
 uniform float metalness : hint_range(0.0, 1.0) = 1.0;
+// How strongly the painted color tints the metal reflection, the way
+// real metals color their specular (gold shines GOLD, not silver).
+// 0 = legacy chrome (matcap dominates; colored trim washes to steel),
+// 1 = fully albedo-tinted matcap.
+uniform float metal_tint : hint_range(0.0, 1.0) = 0.6;
 uniform float diffuse_wrap : hint_range(0.0, 1.0) = 0.4;
 uniform float emissive_energy : hint_range(0.0, 4.0) = 1.2;
 uniform vec4 rim_color : source_color = vec4(0.75, 0.88, 1.0, 1.0);
@@ -70,10 +75,15 @@ void fragment() {
 	vec3 light = normalize(light_dir);
 
 	// Metal: matcap sampled by the world normal — a lit sphere image
-	// gives instant metallic shading; tinted by the painted color so
-	// gold vs steel reads through.
+	// gives instant metallic shading. The reflection is tinted by the
+	// painted color per metal_tint; the legacy chrome term kept the
+	// matcap so dominant that gold trim washed to steel.
 	vec3 metal_col = texture(matcap, clamp(nw.xy * 0.5 + 0.5, vec2(0.0), vec2(1.0))).rgb;
-	vec3 metal = metal_col * (0.6 + 0.4 * albedo.rgb) + metal_col * 0.35;
+	vec3 chrome = metal_col * (0.6 + 0.4 * albedo.rgb) + metal_col * 0.35;
+	// The 1.9 scale keeps tinted brightness comparable to chrome on
+	// near-white albedo, so dialing the tint doesn't dim the armor.
+	vec3 tinted = metal_col * albedo.rgb * 1.9;
+	vec3 metal = mix(chrome, tinted, metal_tint);
 
 	// Lit: half-lambert diffuse, blended in by the G weight so flat
 	// pixels (G=0) stay exactly as painted.

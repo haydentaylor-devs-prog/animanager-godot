@@ -88,6 +88,14 @@ signal animation_event(event_name: String, payload: String)
 		light_direction = value
 		_apply_shading_uniforms()
 
+# How strongly the painted color tints metal reflections (gold shines
+# gold instead of washing to steel). 0 = legacy chrome, 1 = fully
+# albedo-tinted matcap. Mirrors the shader's metal_tint uniform.
+@export_range(0.0, 1.0) var metal_tint: float = 0.6:
+	set(value):
+		metal_tint = value
+		_apply_shading_uniforms()
+
 @export_group("")
 
 # When true, the first root bone's FRAME-0 translate is treated as a
@@ -483,6 +491,7 @@ func _rebuild_shaded_children() -> void:
 			"matcap", matcap if matcap != null else _get_fallback_matcap()
 		)
 		mat.set_shader_parameter("light_dir", light_direction)
+		mat.set_shader_parameter("metal_tint", metal_tint)
 		sprite.material = mat
 
 		add_child(sprite)
@@ -524,6 +533,7 @@ func _apply_shading_uniforms() -> void:
 			continue
 		mat.set_shader_parameter("matcap", cap)
 		mat.set_shader_parameter("light_dir", light_direction)
+		mat.set_shader_parameter("metal_tint", metal_tint)
 
 
 func _shade_textures_for_bone(bone: Dictionary) -> Dictionary:
