@@ -90,8 +90,9 @@ signal animation_event(event_name: String, payload: String)
 
 # How strongly the painted color tints metal reflections (gold shines
 # gold instead of washing to steel). 0 = legacy chrome, 1 = fully
-# albedo-tinted matcap. Mirrors the shader's metal_tint uniform.
-@export_range(0.0, 1.0) var metal_tint: float = 0.6:
+# albedo-tinted matcap, past 1 extrapolates the tint harder. Default
+# 2.0 picked by eye on the Herald. Mirrors the shader's metal_tint.
+@export_range(0.0, 3.0) var metal_tint: float = 2.0:
 	set(value):
 		metal_tint = value
 		_apply_shading_uniforms()
@@ -189,11 +190,18 @@ func get_current_frame() -> float:
 
 
 func set_current_frame(frame: float) -> void:
-	# Scrub the playhead manually. Clamped to a valid range.
+	# Scrub the playhead manually.
 	if rig == null:
 		_current_frame = 0.0
 		return
-	_current_frame = clampf(frame, 0.0, float(rig.total_frames - 1))
+	if rig.is_looping:
+		# Looping clips have a valid domain of [0, total_frames): the
+		# wrap segment past the last integer frame is real playable
+		# time (it interpolates back toward frame 0), so scrubs may
+		# land there and out-of-range scrubs wrap around the cycle.
+		_current_frame = fposmod(frame, float(rig.total_frames))
+	else:
+		_current_frame = clampf(frame, 0.0, float(rig.total_frames - 1))
 	_evaluate_pose(_current_frame)
 	queue_redraw()
 
@@ -640,10 +648,14 @@ func _evaluate_pose(frame: float) -> void:
 	for root in _bone_roots:
 		var root_frames: Array = _frames_by_bone.get(root, [])
 		if not root_frames.is_empty():
-			var rp := AniPoseEvaluator.interpolate(root_frames, frame)
+			var rp := AniPoseEvaluator.interpolate(
+				root_frames, frame, rig.total_frames, rig.is_looping
+			)
 			_root_translate = Vector2(rp.translate_x, rp.translate_y)
 			if zero_root_translate:
-				var rp0 := AniPoseEvaluator.interpolate(root_frames, 0.0)
+				var rp0 := AniPoseEvaluator.interpolate(
+					root_frames, 0.0, rig.total_frames, rig.is_looping
+				)
 				_root_baseline = Vector2(rp0.translate_x, rp0.translate_y)
 				_root_translate -= _root_baseline
 		break
@@ -680,7 +692,9 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 		return
 
 	var frames: Array = _frames_by_bone.get(uuid, [])
-	var p := AniPoseEvaluator.interpolate(frames, frame)
+	var p := AniPoseEvaluator.interpolate(
+		frames, frame, rig.total_frames, rig.is_looping
+	)
 
 	var translate_x: float = p.translate_x
 	var translate_y: float = p.translate_y
@@ -783,7 +797,9 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 			# translate so the target rides along with the body.
 			var target := Vector2(float(chain.target_x), float(chain.target_y))
 			var leaf_frames: Array = _frames_by_bone.get(chain_child, [])
-			var interp := AniPoseEvaluator.interpolate(leaf_frames, frame)
+			var interp := AniPoseEvaluator.interpolate(
+				leaf_frames, frame, rig.total_frames, rig.is_looping
+			)
 			if not is_nan(interp.ik_target_x):
 				target.x = interp.ik_target_x
 			if not is_nan(interp.ik_target_y):

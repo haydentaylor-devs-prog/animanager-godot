@@ -86,8 +86,18 @@ static func _bezier_axis_deriv(t: float, p1: float, p2: float) -> float:
 #
 # Empty list → returns rest defaults. Single keyframe → returns it.
 # Otherwise: find the two surrounding keyframes, apply easing, lerp.
+#
+# [total_frames] + [looping]: when the query falls outside the keyed
+# range of a LOOPING clip, the opposite end's keyframe is used as a
+# virtual neighbor one cycle away, so the wrap segment (last key →
+# frame 0 of the next pass) interpolates instead of holding then
+# snapping. The app's discrete frame-stepped playback never renders
+# sub-frame times so it needs no equivalent; a continuous playhead
+# does (the held wrap read as a dropped frame in run cycles).
 
-static func interpolate(frames: Array, frame: float) -> Dictionary:
+static func interpolate(
+	frames: Array, frame: float, total_frames: int = 0, looping: bool = false
+) -> Dictionary:
 	var rest := {
 		"rotation": 0.0,
 		"translate_x": 0.0,
@@ -111,9 +121,24 @@ static func interpolate(frames: Array, frame: float) -> Dictionary:
 		if f >= frame and after.is_empty():
 			after = kf
 
+	var can_wrap: bool = looping and total_frames > 0
 	if before.is_empty():
-		return _kf_to_dict(after)
-	if after.is_empty() or before.frame_number == after.frame_number:
+		if can_wrap:
+			# Virtual copy of the LAST key one cycle earlier, so the
+			# segment before the first key interpolates from the wrap.
+			before = (frames[frames.size() - 1] as Dictionary).duplicate()
+			before.frame_number = int(before.frame_number) - total_frames
+		else:
+			return _kf_to_dict(after)
+	if after.is_empty():
+		if can_wrap:
+			# Virtual copy of the FIRST key one cycle later — the wrap
+			# segment heads home instead of holding the last pose.
+			after = (frames[0] as Dictionary).duplicate()
+			after.frame_number = int(after.frame_number) + total_frames
+		else:
+			return _kf_to_dict(before)
+	if before.frame_number == after.frame_number:
 		return _kf_to_dict(before)
 
 	# Stepped: hold the "before" value until the next keyframe.

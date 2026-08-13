@@ -36,8 +36,10 @@ uniform float metalness : hint_range(0.0, 1.0) = 1.0;
 // How strongly the painted color tints the metal reflection, the way
 // real metals color their specular (gold shines GOLD, not silver).
 // 0 = legacy chrome (matcap dominates; colored trim washes to steel),
-// 1 = fully albedo-tinted matcap.
-uniform float metal_tint : hint_range(0.0, 1.0) = 0.6;
+// 1 = fully albedo-tinted matcap; values past 1 extrapolate the tint
+// harder (chrome term subtracted). 2.0 chosen by eye on the Herald —
+// gold trim reads rich while pale armor stays steel.
+uniform float metal_tint : hint_range(0.0, 3.0) = 2.0;
 uniform float diffuse_wrap : hint_range(0.0, 1.0) = 0.4;
 uniform float emissive_energy : hint_range(0.0, 4.0) = 1.2;
 uniform vec4 rim_color : source_color = vec4(0.75, 0.88, 1.0, 1.0);
