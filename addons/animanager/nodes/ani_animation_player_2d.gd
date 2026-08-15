@@ -177,6 +177,7 @@ func pause() -> void:
 func stop() -> void:
 	_is_playing = false
 	_current_frame = 0.0
+	_clear_fade()
 	_evaluate_pose(_current_frame)
 	queue_redraw()
 
@@ -204,6 +205,126 @@ func set_current_frame(frame: float) -> void:
 		_current_frame = clampf(frame, 0.0, float(rig.total_frames - 1))
 	_evaluate_pose(_current_frame)
 	queue_redraw()
+
+
+# ── Cross-fade (runtime pose blending) ─────────────────────────────────
+
+# While fading, every local pose blends the OUTGOING clip (advancing
+# on its own playhead) into the CURRENT rig's pose — clip switches
+# work from ANY frame of ANY clip without authored transition art.
+# The captured source is self-contained (rig ref + its own frame
+# index), so it survives the rig setter tearing the live indices
+# down.
+var _fade_from_rig: AniRigResource = null
+var _fade_from_frames_by_bone: Dictionary = {}
+var _fade_from_root_baseline: Vector2 = Vector2.ZERO
+var _fade_from_frame: float = 0.0
+var _fade_elapsed: float = 0.0
+var _fade_duration: float = 0.0
+
+
+## Switch to [new_rig] with a timed pose cross-fade instead of a hard
+## cut. Replaces the `rig = r; set_current_frame(0); play()` sequence.
+## Falls back to a hard cut when there's nothing to fade from, the
+## target is the current rig, or duration <= 0.
+func crossfade_to(new_rig: AniRigResource, duration: float = 0.18) -> void:
+	if rig != null and new_rig != null and new_rig != rig and duration > 0.0:
+		_fade_from_rig = rig
+		_fade_from_frame = _current_frame
+		_fade_elapsed = 0.0
+		_fade_duration = duration
+		# Own copy of the outgoing frame index — _rebuild_indices
+		# clears the live dictionaries in place.
+		_fade_from_frames_by_bone = {}
+		for kf in rig.keyframes:
+			var bu: String = kf.bone_uuid
+			if bu.is_empty():
+				continue
+			if not _fade_from_frames_by_bone.has(bu):
+				_fade_from_frames_by_bone[bu] = []
+			(_fade_from_frames_by_bone[bu] as Array).append(kf)
+		for bu in _fade_from_frames_by_bone:
+			(_fade_from_frames_by_bone[bu] as Array).sort_custom(
+				func(a, b): return int(a.frame_number) < int(b.frame_number)
+			)
+		# Source-side zero_root_translate baseline, so root motion
+		# blends between each clip's own normalized translate.
+		_fade_from_root_baseline = Vector2.ZERO
+		if zero_root_translate:
+			for bone in rig.bones:
+				var parent: Variant = bone.parent_uuid
+				if parent == null or (parent is String and (parent as String).is_empty()):
+					var rf: Array = _fade_from_frames_by_bone.get(bone.uuid, [])
+					if not rf.is_empty():
+						var rp0 := AniPoseEvaluator.interpolate(
+							rf, 0.0, rig.total_frames, rig.is_looping
+						)
+						_fade_from_root_baseline = Vector2(
+							rp0.translate_x, rp0.translate_y
+						)
+					break
+	else:
+		_clear_fade()
+	rig = new_rig
+	set_current_frame(0.0)
+	play()
+
+
+func _clear_fade() -> void:
+	_fade_from_rig = null
+	_fade_from_frames_by_bone = {}
+	_fade_from_root_baseline = Vector2.ZERO
+	_fade_duration = 0.0
+	_fade_elapsed = 0.0
+
+
+# Weight of the TARGET clip (0 = all source, 1 = all target).
+# Smoothstepped so the switch eases in and out.
+func _fade_target_weight() -> float:
+	if _fade_from_rig == null or _fade_duration <= 0.0:
+		return 1.0
+	var t: float = clampf(_fade_elapsed / _fade_duration, 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
+# Local pose for [uuid] on the CURRENT rig, blended with the outgoing
+# clip while a cross-fade is active. Bones match by uuid (all clips
+# of a character export from the same project, so uuids line up); a
+# bone absent from the source blends from its rest values.
+func _blended_local(uuid: String, frames: Array, frame: float) -> Dictionary:
+	var p := AniPoseEvaluator.interpolate(
+		frames, frame, rig.total_frames, rig.is_looping
+	)
+	if _fade_from_rig == null:
+		return p
+	var w := _fade_target_weight()
+	if w >= 1.0:
+		return p
+	var q := AniPoseEvaluator.interpolate(
+		_fade_from_frames_by_bone.get(uuid, []) as Array,
+		_fade_from_frame,
+		_fade_from_rig.total_frames,
+		_fade_from_rig.is_looping,
+	)
+	return {
+		"rotation": lerp_angle(q.rotation, p.rotation, w),
+		"translate_x": lerpf(q.translate_x, p.translate_x, w),
+		"translate_y": lerpf(q.translate_y, p.translate_y, w),
+		"scale_x": lerpf(q.scale_x, p.scale_x, w),
+		"scale_y": lerpf(q.scale_y, p.scale_y, w),
+		"ik_target_x": _lerp_ik(q.ik_target_x, p.ik_target_x, w),
+		"ik_target_y": _lerp_ik(q.ik_target_y, p.ik_target_y, w),
+	}
+
+
+# NAN = "no IK target on this side" — take the defined side rather
+# than poisoning the blend.
+func _lerp_ik(a: float, b: float, w: float) -> float:
+	if is_nan(a):
+		return b
+	if is_nan(b):
+		return a
+	return lerpf(a, b, w)
 
 
 func get_bone_world_transform(bone_uuid_or_name: String) -> Transform2D:
@@ -268,6 +389,22 @@ func _process(delta: float) -> void:
 		return
 	if not _is_playing or rig == null:
 		return
+
+	# Cross-fade bookkeeping: the outgoing clip keeps playing on its
+	# own playhead for the duration of the blend.
+	if _fade_from_rig != null:
+		_fade_elapsed += delta
+		_fade_from_frame += delta * float(_fade_from_rig.frame_rate) * speed
+		if _fade_from_rig.is_looping:
+			_fade_from_frame = fposmod(
+				_fade_from_frame, float(_fade_from_rig.total_frames)
+			)
+		else:
+			_fade_from_frame = minf(
+				_fade_from_frame, float(_fade_from_rig.total_frames - 1)
+			)
+		if _fade_elapsed >= _fade_duration:
+			_clear_fade()
 
 	_current_frame += delta * float(rig.frame_rate) * speed
 	var wrapped := false
@@ -692,9 +829,7 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 		return
 
 	var frames: Array = _frames_by_bone.get(uuid, [])
-	var p := AniPoseEvaluator.interpolate(
-		frames, frame, rig.total_frames, rig.is_looping
-	)
+	var p := _blended_local(uuid, frames, frame)
 
 	var translate_x: float = p.translate_x
 	var translate_y: float = p.translate_y
@@ -711,8 +846,13 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 		or (bone_parent is String and (bone_parent as String).is_empty())
 	)
 	if bone_is_root:
-		translate_x -= _root_baseline.x
-		translate_y -= _root_baseline.y
+		var eff_baseline := _root_baseline
+		if _fade_from_rig != null:
+			eff_baseline = _fade_from_root_baseline.lerp(
+				_root_baseline, _fade_target_weight()
+			)
+		translate_x -= eff_baseline.x
+		translate_y -= eff_baseline.y
 
 	var parent_uuid: Variant = bone.parent_uuid
 	var has_parent: bool = (
@@ -797,9 +937,7 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 			# translate so the target rides along with the body.
 			var target := Vector2(float(chain.target_x), float(chain.target_y))
 			var leaf_frames: Array = _frames_by_bone.get(chain_child, [])
-			var interp := AniPoseEvaluator.interpolate(
-				leaf_frames, frame, rig.total_frames, rig.is_looping
-			)
+			var interp := _blended_local(chain_child, leaf_frames, frame)
 			if not is_nan(interp.ik_target_x):
 				target.x = interp.ik_target_x
 			if not is_nan(interp.ik_target_y):
