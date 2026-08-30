@@ -97,6 +97,30 @@ signal animation_event(event_name: String, payload: String)
 		metal_tint = value
 		_apply_shading_uniforms()
 
+@export_group("Cloth")
+
+# Secondary motion for cloth bones (capes, loincloths, tassels):
+# bones whose NAME contains any keyword below (case-insensitive) get
+# a cheap verlet follow-through sim layered onto the evaluated pose —
+# they trail the node's real motion (dashes, knockback, facing flips)
+# and settle back toward the animated/rest angle, with zero per-clip
+# authoring. Children of a simulated bone inherit its motion through
+# ordinary FK. Author cloth as short 2-3 bone chains; keyframes on
+# cloth bones act as the sim's target bias, not a hard pose.
+@export var cloth_enabled: bool = true
+@export var cloth_bone_keywords: PackedStringArray = [
+	"cape", "cloth", "loincloth", "tassel", "scarf",
+]:
+	set(value):
+		cloth_bone_keywords = value
+		_rebuild_cloth_flags()
+# Pull toward the animated angle per tick (0 = free-floating).
+@export_range(0.01, 1.0, 0.01) var cloth_stiffness: float = 0.12
+# Velocity kill per tick (0 = swings forever, 1 = no follow-through).
+@export_range(0.0, 1.0, 0.01) var cloth_damping: float = 0.18
+# How strongly node movement drags the cloth (0 disables trailing).
+@export_range(0.0, 4.0, 0.05) var cloth_inertia: float = 1.0
+
 @export_group("")
 
 # When true, the first root bone's FRAME-0 translate is treated as a
@@ -131,6 +155,16 @@ signal animation_event(event_name: String, payload: String)
 
 var _is_playing: bool = false
 var _current_frame: float = 0.0
+# Cloth sim state (see the Cloth export group). Keyed by bone uuid;
+# tips live in RIG-LOCAL space, with node motion injected as a wind
+# term so facing flips / global transforms never enter the angle math.
+var _cloth_uuids: Dictionary = {}
+var _cloth_tip: Dictionary = {}
+var _cloth_prev: Dictionary = {}
+var _cloth_dt: float = 0.0
+var _cloth_wind: Vector2 = Vector2.ZERO
+var _cloth_last_gp: Vector2 = Vector2.ZERO
+var _cloth_det_sign: float = 0.0
 # Highest integer frame the event dispatcher has fired for since the
 # last loop wrap. Initialized to -1 so frame-0 events fire on the
 # first tick of playback. Reset to -1 on every loop wrap so events
@@ -387,8 +421,19 @@ func _process(delta: float) -> void:
 		# Editor view just redraws on demand; no playback advance.
 		queue_redraw()
 		return
-	if not _is_playing or rig == null:
+	if rig == null:
 		return
+	if not _is_playing:
+		# Cloth keeps simulating while playback is PAUSED (charge-holds,
+		# cutscene freezes) — the body can still move via the node
+		# transform, and frozen cloth reads as a glitch.
+		if cloth_enabled and not _cloth_uuids.is_empty():
+			_cloth_prepare(delta)
+			_evaluate_pose(_current_frame)
+			_cloth_dt = 0.0
+			queue_redraw()
+		return
+	_cloth_prepare(delta)
 
 	# Cross-fade bookkeeping: the outgoing clip keeps playing on its
 	# own playhead for the duration of the blend.
@@ -424,7 +469,63 @@ func _process(delta: float) -> void:
 	_dispatch_events(int(_current_frame), wrapped)
 
 	_evaluate_pose(_current_frame)
+	# Sim only advances inside dt-carrying passes; scrubs / external
+	# set_current_frame calls re-evaluate with dt 0 and leave it be.
+	_cloth_dt = 0.0
 	queue_redraw()
+
+
+# ── Cloth secondary motion ─────────────────────────────────────────
+
+# Per-tick bookkeeping before the pose pass: clamp dt (hitch guard),
+# derive the node-motion wind term in rig-local space, and reset the
+# sim on facing flips (a mirrored basis teleports every tip — the
+# post-flip pose restarts clean from the animated angles).
+func _cloth_prepare(delta: float) -> void:
+	if not cloth_enabled or _cloth_uuids.is_empty():
+		return
+	_cloth_dt = minf(delta, 0.05)
+	var gt := global_transform
+	var det_sign := signf(gt.determinant())
+	var gp := gt.origin
+	if det_sign != _cloth_det_sign:
+		_cloth_det_sign = det_sign
+		_cloth_tip.clear()
+		_cloth_prev.clear()
+		_cloth_last_gp = gp
+	var delta_global := gp - _cloth_last_gp
+	_cloth_last_gp = gp
+	_cloth_wind = gt.affine_inverse().basis_xform(delta_global)
+	# Teleports (spawns, respawns) produce absurd wind — clamp so the
+	# cloth reacts like a hard yank instead of exploding.
+	var wind_len := _cloth_wind.length()
+	if wind_len > 60.0:
+		_cloth_wind *= 60.0 / wind_len
+
+
+# One verlet step for a flagged bone, called from inside the FK walk
+# with the bone's (post-simulated-ancestors) pivot and the animated
+# target rotation. Returns the simulated world rotation; children
+# composed after this inherit it through ordinary FK.
+func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) -> float:
+	var target_tip := pivot + Vector2(cos(target_rot), sin(target_rot)) * length
+	if not _cloth_tip.has(uuid):
+		_cloth_tip[uuid] = target_tip
+		_cloth_prev[uuid] = target_tip
+		return target_rot
+	var tip: Vector2 = _cloth_tip[uuid]
+	var vel: Vector2 = (tip - Vector2(_cloth_prev[uuid])) * (1.0 - cloth_damping)
+	_cloth_prev[uuid] = tip
+	# Inertia: the node moved, the cloth stays behind — subtract the
+	# motion. Spring: pull toward the animated angle.
+	tip += vel - _cloth_wind * cloth_inertia
+	tip = tip.lerp(target_tip, cloth_stiffness)
+	var dir := tip - pivot
+	if dir.length_squared() < 0.000001:
+		dir = Vector2(cos(target_rot), sin(target_rot))
+	tip = pivot + dir.normalized() * length
+	_cloth_tip[uuid] = tip
+	return dir.angle()
 
 
 # Emit `animation_event` for every event row whose frame is now
@@ -459,8 +560,11 @@ func _rebuild_indices() -> void:
 	_frames_by_bone.clear()
 	_ik_chains_by_leaf.clear()
 	_pose_by_uuid.clear()
+	_cloth_tip.clear()
+	_cloth_prev.clear()
 
 	if rig == null:
+		_cloth_uuids.clear()
 		return
 
 	for bone in rig.bones:
@@ -493,6 +597,21 @@ func _rebuild_indices() -> void:
 		if leaf.is_empty():
 			continue
 		_ik_chains_by_leaf[leaf] = chain
+
+	_rebuild_cloth_flags()
+
+
+# Flag bones for the cloth sim by case-insensitive name keyword.
+func _rebuild_cloth_flags() -> void:
+	_cloth_uuids.clear()
+	if rig == null:
+		return
+	for bone in rig.bones:
+		var lower_name: String = String(bone.get("name", "")).to_lower()
+		for kw in cloth_bone_keywords:
+			if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
+				_cloth_uuids[bone.uuid] = true
+				break
 
 
 # ── Sprite pack auto-binding ───────────────────────────────────────
@@ -982,6 +1101,14 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 				rest_end_x + translate_x - scaled_length * cos(world_rotation),
 				rest_end_y + translate_y - scaled_length * sin(world_rotation),
 			)
+
+	# Cloth override: flagged bones swap their animated world rotation
+	# for the sim's. Runs INSIDE the walk so children (deeper cloth
+	# links, attached trinkets) compose against the simulated pose.
+	# Only when a dt-carrying tick armed the sim — scrubs and
+	# tool-driven evaluations render the pose as authored.
+	if cloth_enabled and _cloth_dt > 0.0 and _cloth_uuids.has(uuid):
+		world_rotation = _cloth_sim(uuid, world_start, world_rotation, scaled_length)
 
 	var world_end := world_start + Vector2(
 		scaled_length * cos(world_rotation),
