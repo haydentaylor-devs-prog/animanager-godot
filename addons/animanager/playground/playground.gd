@@ -108,6 +108,14 @@ func _build_ui() -> void:
 	_slider("Inertia", 0.0, 4.0, _ani.cloth_inertia,
 		func(v: float) -> void: _ani.cloth_inertia = v)
 
+	_header("Hair physics")
+	_slider("Hair stiffness", 0.01, 1.0, _ani.hair_stiffness,
+		func(v: float) -> void: _ani.hair_stiffness = v)
+	_slider("Hair damping", 0.0, 0.9, _ani.hair_damping,
+		func(v: float) -> void: _ani.hair_damping = v)
+	_slider("Hair inertia", 0.0, 4.0, _ani.hair_inertia,
+		func(v: float) -> void: _ani.hair_inertia = v)
+
 	_header("Shading (material + height)")
 	_toggle("Shaded", true, func(v: bool) -> void: _ani.shaded = v)
 	_slider("Metal tint", 0.0, 3.0, _ani.metal_tint,
@@ -200,6 +208,8 @@ func _update_readout() -> void:
 	_readout.text = (
 		"cloth_stiffness = %.2f\ncloth_damping = %.2f\ncloth_inertia = %.2f\n"
 		% [_ani.cloth_stiffness, _ani.cloth_damping, _ani.cloth_inertia]
+		+ "hair_stiffness = %.2f\nhair_damping = %.2f\nhair_inertia = %.2f\n"
+		% [_ani.hair_stiffness, _ani.hair_damping, _ani.hair_inertia]
 		+ "metal_tint = %.2f  light = (%.2f, %.2f, %.2f)\n"
 		% [
 			_ani.metal_tint,

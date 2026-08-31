@@ -121,6 +121,20 @@ signal animation_event(event_name: String, payload: String)
 # How strongly node movement drags the cloth (0 disables trailing).
 @export_range(0.0, 4.0, 0.05) var cloth_inertia: float = 1.0
 
+# Hair is the same sim with its own MATERIAL CLASS: bones matched by
+# these keywords use the hair_* tuning instead of cloth_* — a snappy
+# ponytail and a floaty cape can coexist on one character. Sync
+# groups (front/back layers of a hair mass) work identically.
+@export var hair_bone_keywords: PackedStringArray = [
+	"hair", "ponytail", "braid", "twintail", "pigtail",
+]:
+	set(value):
+		hair_bone_keywords = value
+		_rebuild_cloth_flags()
+@export_range(0.01, 1.0, 0.01) var hair_stiffness: float = 0.25
+@export_range(0.0, 1.0, 0.01) var hair_damping: float = 0.08
+@export_range(0.0, 4.0, 0.05) var hair_inertia: float = 1.2
+
 @export_group("")
 
 # When true, the first root bone's FRAME-0 translate is treated as a
@@ -158,6 +172,10 @@ var _current_frame: float = 0.0
 # Cloth sim state (see the Cloth export group). Keyed by bone uuid;
 # tips live in RIG-LOCAL space, with node motion injected as a wind
 # term so facing flips / global transforms never enter the angle math.
+# Material classes for flagged bones — value stored in _cloth_uuids.
+const CLASS_CLOTH := 0
+const CLASS_HAIR := 1
+
 var _cloth_uuids: Dictionary = {}
 # uuid -> sync key. Cloth bones whose names differ ONLY by a layer
 # token (front/back/f/b) share one sim, so a dress's front and back
@@ -534,6 +552,12 @@ func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) 
 		return target_rot + float(_cloth_deviation.get(key, 0.0))
 	_cloth_stepped[key] = _cloth_tick
 
+	# Material class picks the tuning set (cloth vs hair).
+	var is_hair: bool = int(_cloth_uuids.get(uuid, CLASS_CLOTH)) == CLASS_HAIR
+	var stiffness := hair_stiffness if is_hair else cloth_stiffness
+	var damping := hair_damping if is_hair else cloth_damping
+	var inertia := hair_inertia if is_hair else cloth_inertia
+
 	var target_tip := pivot + Vector2(cos(target_rot), sin(target_rot)) * length
 	if not _cloth_tip.has(key):
 		_cloth_tip[key] = target_tip
@@ -541,12 +565,12 @@ func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) 
 		_cloth_deviation[key] = 0.0
 		return target_rot
 	var tip: Vector2 = _cloth_tip[key]
-	var vel: Vector2 = (tip - Vector2(_cloth_prev[key])) * (1.0 - cloth_damping)
+	var vel: Vector2 = (tip - Vector2(_cloth_prev[key])) * (1.0 - damping)
 	_cloth_prev[key] = tip
 	# Inertia: the node moved, the cloth stays behind — subtract the
 	# motion. Spring: pull toward the animated angle.
-	tip += vel - _cloth_wind * cloth_inertia
-	tip = tip.lerp(target_tip, cloth_stiffness)
+	tip += vel - _cloth_wind * inertia
+	tip = tip.lerp(target_tip, stiffness)
 	var dir := tip - pivot
 	if dir.length_squared() < 0.000001:
 		dir = Vector2(cos(target_rot), sin(target_rot))
@@ -633,9 +657,10 @@ func _rebuild_indices() -> void:
 	_rebuild_cloth_flags()
 
 
-# Flag bones for the cloth sim by case-insensitive name keyword, and
-# derive each flagged bone's sync key (name with layer tokens removed)
-# so front/back panel pairs share a sim.
+# Flag bones for the sim by case-insensitive name keyword, classify
+# them (cloth vs hair — separate tuning sets), and derive each
+# flagged bone's sync key (name with layer tokens removed) so
+# front/back panel pairs share a sim.
 func _rebuild_cloth_flags() -> void:
 	_cloth_uuids.clear()
 	_cloth_sync.clear()
@@ -643,11 +668,19 @@ func _rebuild_cloth_flags() -> void:
 		return
 	for bone in rig.bones:
 		var lower_name: String = String(bone.get("name", "")).to_lower()
+		var matched := false
 		for kw in cloth_bone_keywords:
 			if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
-				_cloth_uuids[bone.uuid] = true
-				_cloth_sync[bone.uuid] = _cloth_sync_key(lower_name, bone.uuid)
+				_cloth_uuids[bone.uuid] = CLASS_CLOTH
+				matched = true
 				break
+		if not matched:
+			for kw in hair_bone_keywords:
+				if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
+					_cloth_uuids[bone.uuid] = CLASS_HAIR
+					break
+		if _cloth_uuids.has(bone.uuid):
+			_cloth_sync[bone.uuid] = _cloth_sync_key(lower_name, bone.uuid)
 
 
 # Strip layer tokens (front / back / f / b as WHOLE words) and squeeze
