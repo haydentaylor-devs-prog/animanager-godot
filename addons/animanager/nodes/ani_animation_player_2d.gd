@@ -159,8 +159,20 @@ var _current_frame: float = 0.0
 # tips live in RIG-LOCAL space, with node motion injected as a wind
 # term so facing flips / global transforms never enter the angle math.
 var _cloth_uuids: Dictionary = {}
+# uuid -> sync key. Cloth bones whose names differ ONLY by a layer
+# token (front/back/f/b) share one sim, so a dress's front and back
+# panels — sandwiching the legs at different z-orders — swing in
+# perfect lock-step and can never scissor apart. The shared value is
+# the DEVIATION from each bone's own animated angle, so panels with
+# slightly different authored rests keep their art.
+var _cloth_sync: Dictionary = {}
 var _cloth_tip: Dictionary = {}
 var _cloth_prev: Dictionary = {}
+# sync key -> deviation (sim − animated) computed by the first bone
+# of the group this tick; followers apply it to their own target.
+var _cloth_deviation: Dictionary = {}
+var _cloth_stepped: Dictionary = {}
+var _cloth_tick: int = 0
 var _cloth_dt: float = 0.0
 var _cloth_wind: Vector2 = Vector2.ZERO
 var _cloth_last_gp: Vector2 = Vector2.ZERO
@@ -485,6 +497,7 @@ func _cloth_prepare(delta: float) -> void:
 	if not cloth_enabled or _cloth_uuids.is_empty():
 		return
 	_cloth_dt = minf(delta, 0.05)
+	_cloth_tick += 1
 	var gt := global_transform
 	var det_sign := signf(gt.determinant())
 	var gp := gt.origin
@@ -492,6 +505,7 @@ func _cloth_prepare(delta: float) -> void:
 		_cloth_det_sign = det_sign
 		_cloth_tip.clear()
 		_cloth_prev.clear()
+		_cloth_deviation.clear()
 		_cloth_last_gp = gp
 	var delta_global := gp - _cloth_last_gp
 	_cloth_last_gp = gp
@@ -507,15 +521,28 @@ func _cloth_prepare(delta: float) -> void:
 # with the bone's (post-simulated-ancestors) pivot and the animated
 # target rotation. Returns the simulated world rotation; children
 # composed after this inherit it through ordinary FK.
+#
+# State is keyed by SYNC KEY, not uuid: the first bone of a sync
+# group this tick advances the shared sim and records the group's
+# angular deviation (sim − animated); later group members apply that
+# same deviation to their OWN animated angle. A dress's front and
+# back panels therefore swing as one sheet — no scissoring — while
+# each keeps its authored rest pose.
 func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) -> float:
+	var key: String = _cloth_sync.get(uuid, uuid)
+	if int(_cloth_stepped.get(key, -1)) == _cloth_tick:
+		return target_rot + float(_cloth_deviation.get(key, 0.0))
+	_cloth_stepped[key] = _cloth_tick
+
 	var target_tip := pivot + Vector2(cos(target_rot), sin(target_rot)) * length
-	if not _cloth_tip.has(uuid):
-		_cloth_tip[uuid] = target_tip
-		_cloth_prev[uuid] = target_tip
+	if not _cloth_tip.has(key):
+		_cloth_tip[key] = target_tip
+		_cloth_prev[key] = target_tip
+		_cloth_deviation[key] = 0.0
 		return target_rot
-	var tip: Vector2 = _cloth_tip[uuid]
-	var vel: Vector2 = (tip - Vector2(_cloth_prev[uuid])) * (1.0 - cloth_damping)
-	_cloth_prev[uuid] = tip
+	var tip: Vector2 = _cloth_tip[key]
+	var vel: Vector2 = (tip - Vector2(_cloth_prev[key])) * (1.0 - cloth_damping)
+	_cloth_prev[key] = tip
 	# Inertia: the node moved, the cloth stays behind — subtract the
 	# motion. Spring: pull toward the animated angle.
 	tip += vel - _cloth_wind * cloth_inertia
@@ -524,8 +551,10 @@ func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) 
 	if dir.length_squared() < 0.000001:
 		dir = Vector2(cos(target_rot), sin(target_rot))
 	tip = pivot + dir.normalized() * length
-	_cloth_tip[uuid] = tip
-	return dir.angle()
+	_cloth_tip[key] = tip
+	var sim_rot := dir.angle()
+	_cloth_deviation[key] = angle_difference(target_rot, sim_rot)
+	return sim_rot
 
 
 # Emit `animation_event` for every event row whose frame is now
@@ -562,9 +591,12 @@ func _rebuild_indices() -> void:
 	_pose_by_uuid.clear()
 	_cloth_tip.clear()
 	_cloth_prev.clear()
+	_cloth_deviation.clear()
+	_cloth_stepped.clear()
 
 	if rig == null:
 		_cloth_uuids.clear()
+		_cloth_sync.clear()
 		return
 
 	for bone in rig.bones:
@@ -601,9 +633,12 @@ func _rebuild_indices() -> void:
 	_rebuild_cloth_flags()
 
 
-# Flag bones for the cloth sim by case-insensitive name keyword.
+# Flag bones for the cloth sim by case-insensitive name keyword, and
+# derive each flagged bone's sync key (name with layer tokens removed)
+# so front/back panel pairs share a sim.
 func _rebuild_cloth_flags() -> void:
 	_cloth_uuids.clear()
+	_cloth_sync.clear()
 	if rig == null:
 		return
 	for bone in rig.bones:
@@ -611,7 +646,24 @@ func _rebuild_cloth_flags() -> void:
 		for kw in cloth_bone_keywords:
 			if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
 				_cloth_uuids[bone.uuid] = true
+				_cloth_sync[bone.uuid] = _cloth_sync_key(lower_name, bone.uuid)
 				break
+
+
+# Strip layer tokens (front / back / f / b as WHOLE words) and squeeze
+# whitespace: "Skirt Cloth 1 Front" and "Skirt Cloth 1 Back" both key
+# as "skirt cloth 1" — one shared sim. A name with no layer token
+# keys as itself, i.e. its own independent sim.
+func _cloth_sync_key(lower_name: String, uuid: String) -> String:
+	var words: PackedStringArray = lower_name.split(" ", false)
+	var kept := PackedStringArray()
+	for w in words:
+		if w == "front" or w == "back" or w == "f" or w == "b":
+			continue
+		kept.append(w)
+	if kept.is_empty():
+		return uuid
+	return " ".join(kept)
 
 
 # ── Sprite pack auto-binding ───────────────────────────────────────
