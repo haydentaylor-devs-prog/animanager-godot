@@ -94,6 +94,9 @@ func _build_ui() -> void:
 	_panel.add_child(_readout)
 
 	_header("Playback")
+	_slider("Zoom", 0.5, 10.0, 3.0, func(v: float) -> void:
+		# Preserve the facing flip (scale.x sign).
+		_ani.scale = Vector2(v * signf(_ani.scale.x), v))
 	_slider("Speed", 0.1, 3.0, 1.0, func(v: float) -> void: _ani.speed = v)
 	_toggle("Auto-sway (excite cloth)", true,
 		func(v: bool) -> void: _sway = v)
