@@ -46,6 +46,20 @@ var _all_controls: Dictionary = {}
 var _preset_name: LineEdit
 var _preset_pick: OptionButton
 const PRESETS_PATH := "user://playground_presets.json"
+# Weapon attachment fitting (2026-09-20): freeze the pose, drag +
+# rotate a weapon PNG into the hand, then Save computes the
+# transform RELATIVE TO THE HAND BONE — which makes it valid for
+# every clip, since the runtime re-derives the weapon's placement
+# from the bone's evaluated transform each frame (the live follow
+# after saving demonstrates exactly what the game will do).
+var _weapon: Sprite2D
+var _weapon_pick: OptionButton
+var _bone_pick: OptionButton
+var _attach_mode := false
+var _attach_btn: Button
+var _follow: Dictionary = {}  # bone / offset_x/y / rotation / scale
+const WEAPONS_DIR := "res://assets/weapons"
+const ATTACH_PATH := "user://weapon_attachment.json"
 const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
 const DRAG_MAX_DEFLECT := 150.0
 
@@ -60,6 +74,7 @@ func _ready() -> void:
 	_build_ui()
 	get_viewport().size_changed.connect(_center_rig)
 
+	_load_attachment()
 	var env_rig := OS.get_environment("AM_PLAYGROUND_RIG")
 	if env_rig != "":
 		_load_rig(env_rig)
@@ -79,10 +94,18 @@ func _process(delta: float) -> void:
 	if _sway and not _dragging:
 		_sway_t += delta
 		_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
-	elif _dragging:
+	elif _dragging and not _attach_mode:
 		var stick := (_drag_current - _drag_origin).limit_length(
 			DRAG_MAX_DEFLECT)
 		_ani.position += stick * DRAG_SPEED_PER_PX * delta
+	# Live weapon follow: re-derive placement from the hand bone's
+	# evaluated transform every frame — what the game will do.
+	if _weapon != null and not _attach_mode and not _follow.is_empty():
+		var t := _ani.get_bone_world_transform(String(_follow.bone))
+		_weapon.position = t * Vector2(
+			float(_follow.offset_x), float(_follow.offset_y))
+		_weapon.rotation = t.get_rotation() + float(_follow.rotation)
+		_weapon.scale = Vector2(float(_follow.scale), float(_follow.scale))
 	_update_readout()
 
 
@@ -95,6 +118,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			_drag_current = event.position
 	elif event is InputEventMouseMotion and _dragging:
 		_drag_current = event.position
+		# Attach mode: the drag moves the WEAPON, in rig-local units
+		# (signed division handles zoom AND the facing flip).
+		if _attach_mode and _weapon != null:
+			_weapon.position += Vector2(
+				event.relative.x / _ani.scale.x,
+				event.relative.y / _ani.scale.y)
 
 
 # ── UI ─────────────────────────────────────────────────────────────
@@ -171,6 +200,28 @@ func _build_ui() -> void:
 	_slider("Limb inertia", 0.0, 4.0, _ani.limb_inertia,
 		func(v: float) -> void: _ani.limb_inertia = v)
 
+	_header("Weapon")
+	_weapon_pick = OptionButton.new()
+	_panel.add_child(_weapon_pick)
+	_refresh_weapon_list()
+	_weapon_pick.item_selected.connect(func(_i: int) -> void: _spawn_weapon())
+	_bone_pick = OptionButton.new()
+	_panel.add_child(_bone_pick)
+	_attach_btn = Button.new()
+	_attach_btn.text = "Attach mode (freeze + drag weapon)"
+	_attach_btn.toggle_mode = true
+	_attach_btn.toggled.connect(_set_attach_mode)
+	_panel.add_child(_attach_btn)
+	_slider("Weapon rotation (deg)", -180.0, 180.0, 0.0,
+		func(v: float) -> void:
+			if _weapon != null and _attach_mode:
+				_weapon.rotation_degrees = v)
+	_slider("Weapon scale", 0.1, 4.0, 1.0,
+		func(v: float) -> void:
+			if _weapon != null and _attach_mode:
+				_weapon.scale = Vector2(v, v))
+	_button("Save attachment", _save_attachment)
+
 	_header("Shading (material + height)")
 	_toggle("Shaded", true, func(v: bool) -> void: _ani.shaded = v)
 	_slider("Metal tint", 0.0, 3.0, _ani.metal_tint,
@@ -192,6 +243,98 @@ func _build_ui() -> void:
 		"res://animations") else "res://"
 	_dialog.file_selected.connect(_load_rig)
 	layer.add_child(_dialog)
+
+
+func _refresh_weapon_list() -> void:
+	_weapon_pick.clear()
+	var dir := DirAccess.open(WEAPONS_DIR)
+	if dir == null:
+		_weapon_pick.add_item("(no assets/weapons folder)")
+		return
+	for f in dir.get_files():
+		if f.get_extension().to_lower() == "png":
+			_weapon_pick.add_item(f)
+	if _weapon_pick.item_count == 0:
+		_weapon_pick.add_item("(drop PNGs in assets/weapons)")
+
+
+func _refresh_bone_list() -> void:
+	_bone_pick.clear()
+	if _ani.rig == null:
+		return
+	var hands := []
+	var others := []
+	for bone in _ani.rig.bones:
+		var n := String(bone.get("name", ""))
+		if n.is_empty():
+			continue
+		if n.containsn("hand"):
+			hands.append(n)
+		else:
+			others.append(n)
+	for n in hands + others:
+		_bone_pick.add_item(n)
+
+
+func _spawn_weapon() -> void:
+	var fname := _weapon_pick.get_item_text(_weapon_pick.selected)
+	if not fname.ends_with(".png"):
+		return
+	var tex: Texture2D = load(WEAPONS_DIR + "/" + fname)
+	if tex == null:
+		return
+	if _weapon == null:
+		_weapon = Sprite2D.new()
+		_ani.add_child(_weapon)
+	_weapon.texture = tex
+	if _follow.is_empty():
+		_weapon.position = Vector2.ZERO
+		_weapon.rotation = 0.0
+
+
+func _set_attach_mode(on: bool) -> void:
+	_attach_mode = on
+	if on:
+		if _weapon == null:
+			_spawn_weapon()
+		_sway = false
+		_ani.pause()
+	else:
+		_ani.play()
+
+
+func _save_attachment() -> void:
+	if _weapon == null or _bone_pick.selected < 0:
+		return
+	var bone := _bone_pick.get_item_text(_bone_pick.selected)
+	var t := _ani.get_bone_world_transform(bone)
+	var local_off := t.affine_inverse() * _weapon.position
+	var local_rot := _weapon.rotation - t.get_rotation()
+	_follow = {
+		"weapon": _weapon_pick.get_item_text(_weapon_pick.selected),
+		"bone": bone,
+		"offset_x": local_off.x,
+		"offset_y": local_off.y,
+		"rotation": local_rot,
+		"scale": _weapon.scale.x,
+	}
+	var f := FileAccess.open(ATTACH_PATH, FileAccess.WRITE)
+	f.store_string(JSON.stringify(_follow, "  "))
+	_attach_btn.button_pressed = false  # exits attach mode -> live follow
+
+
+func _load_attachment() -> void:
+	if not FileAccess.file_exists(ATTACH_PATH):
+		return
+	var parsed: Variant = JSON.parse_string(
+		FileAccess.get_file_as_string(ATTACH_PATH))
+	if not parsed is Dictionary:
+		return
+	_follow = parsed
+	for i in range(_weapon_pick.item_count):
+		if _weapon_pick.get_item_text(i) == String(_follow.get("weapon", "")):
+			_weapon_pick.select(i)
+	_spawn_weapon()
 
 
 func _read_presets() -> Dictionary:
@@ -336,6 +479,7 @@ func _load_rig(path: String) -> void:
 		_ani.loop_override = 1  # playground always loops, even one-shots
 		_ani.set_current_frame(0.0)
 		_ani.play()
+		_refresh_bone_list()
 
 
 func _set_light(axis: int, v: float) -> void:
@@ -367,6 +511,17 @@ func _update_readout() -> void:
 		]
 		+ "(copy these into your scene/config when happy)"
 	)
+	if not _follow.is_empty():
+		_readout.text += (
+			"\nATTACH %s -> %s off=(%.1f, %.1f) rot=%.1f deg scale=%.2f"
+			% [
+				_follow.get("weapon"), _follow.get("bone"),
+				float(_follow.get("offset_x", 0)),
+				float(_follow.get("offset_y", 0)),
+				rad_to_deg(float(_follow.get("rotation", 0))),
+				float(_follow.get("scale", 1)),
+			]
+		)
 
 
 func _take_shot(path: String) -> void:
