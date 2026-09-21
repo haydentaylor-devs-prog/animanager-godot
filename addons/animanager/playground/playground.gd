@@ -37,6 +37,15 @@ var _drag_current: Vector2 = Vector2.ZERO
 # controls (setting the control re-fires its signal, so the node
 # properties and labels update through the normal path).
 var _section_controls: Array = []
+# Named presets (2026-09-20): every slider/toggle also registers in a
+# label-keyed map; Save snapshots their live values to a JSON at
+# user://playground_presets.json, Load pushes values back through
+# the controls (signals re-fire, so everything applies + labels
+# update — same mechanism as the section resets).
+var _all_controls: Dictionary = {}
+var _preset_name: LineEdit
+var _preset_pick: OptionButton
+const PRESETS_PATH := "user://playground_presets.json"
 const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
 const DRAG_MAX_DEFLECT := 150.0
 
@@ -114,6 +123,17 @@ func _build_ui() -> void:
 	_readout.add_theme_font_size_override("font_size", 12)
 	_panel.add_child(_readout)
 
+	_header("Presets")
+	_preset_name = LineEdit.new()
+	_preset_name.placeholder_text = "Preset name..."
+	_panel.add_child(_preset_name)
+	_button("Save current settings", _save_preset)
+	_preset_pick = OptionButton.new()
+	_panel.add_child(_preset_pick)
+	_refresh_preset_list()
+	_button("Load selected", _load_preset)
+	_button("Delete selected", _delete_preset)
+
 	_header("Playback")
 	_slider("Zoom", 0.5, 10.0, 3.0, func(v: float) -> void:
 		# Preserve the facing flip (scale.x sign).
@@ -174,6 +194,70 @@ func _build_ui() -> void:
 	layer.add_child(_dialog)
 
 
+func _read_presets() -> Dictionary:
+	if not FileAccess.file_exists(PRESETS_PATH):
+		return {}
+	var txt := FileAccess.get_file_as_string(PRESETS_PATH)
+	var parsed: Variant = JSON.parse_string(txt)
+	return parsed if parsed is Dictionary else {}
+
+
+func _write_presets(presets: Dictionary) -> void:
+	var f := FileAccess.open(PRESETS_PATH, FileAccess.WRITE)
+	f.store_string(JSON.stringify(presets, "  "))
+
+
+func _refresh_preset_list() -> void:
+	_preset_pick.clear()
+	for preset_name in _read_presets().keys():
+		_preset_pick.add_item(String(preset_name))
+
+
+func _save_preset() -> void:
+	var preset_name := _preset_name.text.strip_edges()
+	if preset_name.is_empty():
+		return
+	var values := {}
+	for label in _all_controls:
+		var ctrl: Control = _all_controls[label]
+		if ctrl is HSlider:
+			values[label] = (ctrl as HSlider).value
+		elif ctrl is CheckBox:
+			values[label] = (ctrl as CheckBox).button_pressed
+	var presets := _read_presets()
+	presets[preset_name] = values
+	_write_presets(presets)
+	_refresh_preset_list()
+	for i in range(_preset_pick.item_count):
+		if _preset_pick.get_item_text(i) == preset_name:
+			_preset_pick.select(i)
+
+
+func _load_preset() -> void:
+	if _preset_pick.selected < 0:
+		return
+	var presets := _read_presets()
+	var values: Variant = presets.get(
+		_preset_pick.get_item_text(_preset_pick.selected))
+	if not values is Dictionary:
+		return
+	for label in (values as Dictionary):
+		var ctrl: Control = _all_controls.get(label)
+		if ctrl is HSlider:
+			(ctrl as HSlider).value = float(values[label])
+		elif ctrl is CheckBox:
+			(ctrl as CheckBox).button_pressed = bool(values[label])
+
+
+func _delete_preset() -> void:
+	if _preset_pick.selected < 0:
+		return
+	var presets := _read_presets()
+	presets.erase(_preset_pick.get_item_text(_preset_pick.selected))
+	_write_presets(presets)
+	_refresh_preset_list()
+
+
 func _end_section() -> void:
 	if _section_controls.is_empty():
 		return
@@ -221,6 +305,7 @@ func _slider(
 	row.add_child(s)
 	_panel.add_child(row)
 	_section_controls.append([s, value])
+	_all_controls[label_text] = s
 
 
 func _toggle(text: String, initial: bool, on_change: Callable) -> void:
@@ -230,6 +315,7 @@ func _toggle(text: String, initial: bool, on_change: Callable) -> void:
 	c.toggled.connect(on_change)
 	_panel.add_child(c)
 	_section_controls.append([c, initial])
+	_all_controls[text] = c
 
 
 func _button(text: String, on_press: Callable) -> void:
