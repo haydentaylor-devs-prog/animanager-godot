@@ -25,6 +25,14 @@ var _sway: bool = true
 var _sway_t: float = 0.0
 var _dragging: bool = false
 var _base_pos: Vector2
+# Click-hold virtual joystick (2026-09-20): direct cursor-following
+# transferred every mouse jitter straight into the cloth sim and
+# read as violent. Instead, the click point becomes a stick center
+# and cursor deflection from it drives a smooth capped velocity.
+var _drag_origin: Vector2 = Vector2.ZERO
+var _drag_current: Vector2 = Vector2.ZERO
+const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
+const DRAG_MAX_DEFLECT := 150.0
 
 
 func _ready() -> void:
@@ -56,6 +64,10 @@ func _process(delta: float) -> void:
 	if _sway and not _dragging:
 		_sway_t += delta
 		_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
+	elif _dragging:
+		var stick := (_drag_current - _drag_origin).limit_length(
+			DRAG_MAX_DEFLECT)
+		_ani.position += stick * DRAG_SPEED_PER_PX * delta
 	_update_readout()
 
 
@@ -63,8 +75,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	# Drag the character around to feel the cloth react to real motion.
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_dragging = event.pressed
+		if _dragging:
+			_drag_origin = event.position
+			_drag_current = event.position
 	elif event is InputEventMouseMotion and _dragging:
-		_ani.position += event.relative
+		_drag_current = event.position
 
 
 # ── UI ─────────────────────────────────────────────────────────────
