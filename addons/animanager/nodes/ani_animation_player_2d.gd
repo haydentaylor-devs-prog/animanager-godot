@@ -135,6 +135,22 @@ signal animation_event(event_name: String, payload: String)
 @export_range(0.0, 1.0, 0.01) var hair_damping: float = 0.08
 @export_range(0.0, 4.0, 0.05) var hair_inertia: float = 1.2
 
+# LIMB class (2026-09-20): gentle leg-sway for permanently airborne
+# characters (Seraph/Solace) — free-hanging legs are physically
+# heavy cloth. Keyword list defaults EMPTY: grounded characters'
+# legs must stay animation-driven; a flyer's node (or the
+# playground toggle) opts in with e.g. ["leg", "foot"]. Tuning is
+# stiffer + heavier-damped than cloth: legs settle firmly, trail
+# less. Keys on leg bones remain the sim's target bias, so an
+# authored idle leg pose still reads through the sway.
+@export var limb_bone_keywords: PackedStringArray = []:
+	set(value):
+		limb_bone_keywords = value
+		_rebuild_cloth_flags()
+@export_range(0.01, 1.0, 0.01) var limb_stiffness: float = 0.35
+@export_range(0.0, 1.0, 0.01) var limb_damping: float = 0.25
+@export_range(0.0, 4.0, 0.05) var limb_inertia: float = 0.6
+
 @export_group("")
 
 # When true, the first root bone's FRAME-0 translate is treated as a
@@ -175,6 +191,7 @@ var _current_frame: float = 0.0
 # Material classes for flagged bones — value stored in _cloth_uuids.
 const CLASS_CLOTH := 0
 const CLASS_HAIR := 1
+const CLASS_LIMB := 2
 
 var _cloth_uuids: Dictionary = {}
 # uuid -> sync key. Cloth bones whose names differ ONLY by a layer
@@ -552,11 +569,19 @@ func _cloth_sim(uuid: String, pivot: Vector2, target_rot: float, length: float) 
 		return target_rot + float(_cloth_deviation.get(key, 0.0))
 	_cloth_stepped[key] = _cloth_tick
 
-	# Material class picks the tuning set (cloth vs hair).
-	var is_hair: bool = int(_cloth_uuids.get(uuid, CLASS_CLOTH)) == CLASS_HAIR
-	var stiffness := hair_stiffness if is_hair else cloth_stiffness
-	var damping := hair_damping if is_hair else cloth_damping
-	var inertia := hair_inertia if is_hair else cloth_inertia
+	# Material class picks the tuning set (cloth / hair / limb).
+	var stiffness := cloth_stiffness
+	var damping := cloth_damping
+	var inertia := cloth_inertia
+	match int(_cloth_uuids.get(uuid, CLASS_CLOTH)):
+		CLASS_HAIR:
+			stiffness = hair_stiffness
+			damping = hair_damping
+			inertia = hair_inertia
+		CLASS_LIMB:
+			stiffness = limb_stiffness
+			damping = limb_damping
+			inertia = limb_inertia
 
 	var target_tip := pivot + Vector2(cos(target_rot), sin(target_rot)) * length
 	if not _cloth_tip.has(key):
@@ -678,6 +703,12 @@ func _rebuild_cloth_flags() -> void:
 			for kw in hair_bone_keywords:
 				if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
 					_cloth_uuids[bone.uuid] = CLASS_HAIR
+					matched = true
+					break
+		if not matched:
+			for kw in limb_bone_keywords:
+				if not String(kw).is_empty() and lower_name.contains(String(kw).to_lower()):
+					_cloth_uuids[bone.uuid] = CLASS_LIMB
 					break
 		if _cloth_uuids.has(bone.uuid):
 			_cloth_sync[bone.uuid] = _cloth_sync_key(lower_name, bone.uuid)

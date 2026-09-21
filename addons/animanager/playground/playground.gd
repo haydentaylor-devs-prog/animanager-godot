@@ -134,6 +134,16 @@ func _build_ui() -> void:
 	_slider("Hair inertia", 0.0, 4.0, _ani.hair_inertia,
 		func(v: float) -> void: _ani.hair_inertia = v)
 
+	_header("Limb sway (flyers)")
+	_toggle("Sway legs (leg/foot bones)", false, func(v: bool) -> void:
+		_ani.limb_bone_keywords = 			PackedStringArray(["leg", "foot"]) if v else PackedStringArray())
+	_slider("Limb stiffness", 0.01, 1.0, _ani.limb_stiffness,
+		func(v: float) -> void: _ani.limb_stiffness = v)
+	_slider("Limb damping", 0.0, 0.9, _ani.limb_damping,
+		func(v: float) -> void: _ani.limb_damping = v)
+	_slider("Limb inertia", 0.0, 4.0, _ani.limb_inertia,
+		func(v: float) -> void: _ani.limb_inertia = v)
+
 	_header("Shading (material + height)")
 	_toggle("Shaded", true, func(v: bool) -> void: _ani.shaded = v)
 	_slider("Metal tint", 0.0, 3.0, _ani.metal_tint,
@@ -223,8 +233,13 @@ func _update_readout() -> void:
 	if _ani.rig == null:
 		_readout.text = "No rig loaded. Load one, then drag the character\naround to feel the cloth."
 		return
+	var counts := {0: 0, 1: 0, 2: 0}
+	for cls in _ani._cloth_uuids.values():
+		counts[int(cls)] = int(counts.get(int(cls), 0)) + 1
 	_readout.text = (
-		"cloth_stiffness = %.2f\ncloth_damping = %.2f\ncloth_inertia = %.2f\n"
+		"sim bones — cloth: %d · hair: %d · limbs: %d\n"
+		% [counts[0], counts[1], counts[2]]
+		+ "cloth_stiffness = %.2f\ncloth_damping = %.2f\ncloth_inertia = %.2f\n"
 		% [_ani.cloth_stiffness, _ani.cloth_damping, _ani.cloth_inertia]
 		+ "hair_stiffness = %.2f\nhair_damping = %.2f\nhair_inertia = %.2f\n"
 		% [_ani.hair_stiffness, _ani.hair_damping, _ani.hair_inertia]
