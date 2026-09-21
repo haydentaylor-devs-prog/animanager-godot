@@ -31,6 +31,12 @@ var _base_pos: Vector2
 # and cursor deflection from it drives a smooth capped velocity.
 var _drag_origin: Vector2 = Vector2.ZERO
 var _drag_current: Vector2 = Vector2.ZERO
+# Per-section reset support (2026-09-20): sliders/toggles register
+# themselves with their default; _header closes the previous
+# section with a small "Reset section" button that restores those
+# controls (setting the control re-fires its signal, so the node
+# properties and labels update through the normal path).
+var _section_controls: Array = []
 const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
 const DRAG_MAX_DEFLECT := 150.0
 
@@ -136,7 +142,8 @@ func _build_ui() -> void:
 
 	_header("Limb sway (flyers)")
 	_toggle("Sway legs (leg/foot bones)", false, func(v: bool) -> void:
-		_ani.limb_bone_keywords = 			PackedStringArray(["leg", "foot"]) if v else PackedStringArray())
+		var kws := PackedStringArray(["leg", "foot"]) if v else PackedStringArray()
+		_ani.limb_bone_keywords = kws)
 	_slider("Limb stiffness", 0.01, 1.0, _ani.limb_stiffness,
 		func(v: float) -> void: _ani.limb_stiffness = v)
 	_slider("Limb damping", 0.0, 0.9, _ani.limb_damping,
@@ -155,6 +162,8 @@ func _build_ui() -> void:
 	_slider("Light Z (height depth)", 0.1, 1.5, _ani.light_direction.z,
 		func(v: float) -> void: _set_light(2, v))
 
+	_end_section()
+
 	_dialog = FileDialog.new()
 	_dialog.access = FileDialog.ACCESS_RESOURCES
 	_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
@@ -165,7 +174,25 @@ func _build_ui() -> void:
 	layer.add_child(_dialog)
 
 
+func _end_section() -> void:
+	if _section_controls.is_empty():
+		return
+	var captured := _section_controls.duplicate()
+	_section_controls = []
+	var b := Button.new()
+	b.text = "Reset section"
+	b.add_theme_font_size_override("font_size", 11)
+	b.pressed.connect(func() -> void:
+		for pair in captured:
+			if pair[0] is HSlider:
+				(pair[0] as HSlider).value = pair[1]
+			elif pair[0] is CheckBox:
+				(pair[0] as CheckBox).button_pressed = pair[1])
+	_panel.add_child(b)
+
+
 func _header(text: String) -> void:
+	_end_section()
 	var l := Label.new()
 	l.text = text
 	l.add_theme_font_size_override("font_size", 15)
@@ -193,6 +220,7 @@ func _slider(
 	update.call(value)
 	row.add_child(s)
 	_panel.add_child(row)
+	_section_controls.append([s, value])
 
 
 func _toggle(text: String, initial: bool, on_change: Callable) -> void:
@@ -201,6 +229,7 @@ func _toggle(text: String, initial: bool, on_change: Callable) -> void:
 	c.button_pressed = initial
 	c.toggled.connect(on_change)
 	_panel.add_child(c)
+	_section_controls.append([c, initial])
 
 
 func _button(text: String, on_press: Callable) -> void:
