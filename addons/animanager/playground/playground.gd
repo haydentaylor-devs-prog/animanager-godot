@@ -57,9 +57,16 @@ var _weapon_pick: OptionButton
 var _bone_pick: OptionButton
 var _attach_mode := false
 var _attach_btn: Button
-var _follow: Dictionary = {}  # bone / offset_x/y / rotation / scale
+var _follow: Dictionary = {}  # bone / offset_x/y / rotation / scale / behind
+# All saved attachments, keyed by CHARACTER: the rig's root-bone
+# uuid, which is identical across every animrig exported from the
+# same sprig (it's what cross-fades match on). Loading any of a
+# character's clips re-applies their weapon; loading a different
+# character unloads it (2026-09-23).
+var _attachments: Dictionary = {}
+var _weapon_behind := false
 const WEAPONS_DIR := "res://assets/weapons"
-const ATTACH_PATH := "user://weapon_attachment.json"
+const ATTACH_PATH := "user://weapon_attachments.json"
 const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
 const DRAG_MAX_DEFLECT := 150.0
 
@@ -212,6 +219,9 @@ func _build_ui() -> void:
 	_attach_btn.toggle_mode = true
 	_attach_btn.toggled.connect(_set_attach_mode)
 	_panel.add_child(_attach_btn)
+	_toggle("Draw behind character", false, func(v: bool) -> void:
+		_weapon_behind = v
+		_apply_weapon_layer())
 	_slider("Weapon rotation (deg)", -180.0, 180.0, 0.0,
 		func(v: float) -> void:
 			if _weapon != null and _attach_mode:
@@ -287,9 +297,56 @@ func _spawn_weapon() -> void:
 		_weapon = Sprite2D.new()
 		_ani.add_child(_weapon)
 	_weapon.texture = tex
+	_apply_weapon_layer()
 	if _follow.is_empty():
 		_weapon.position = Vector2.ZERO
 		_weapon.rotation = 0.0
+
+
+# Explicit z-order: shaded mode re-appends its per-bone child
+# sprites AFTER the weapon (tree-order draws them on top), while
+# unshaded draws the character in the node's own pass BEFORE
+# children — the weapon flipped sides with the Shaded checkbox
+# (Hayden, 2026-09-23). z_index + show_behind_parent pin it to the
+# chosen side in both modes.
+func _apply_weapon_layer() -> void:
+	if _weapon == null:
+		return
+	_weapon.z_as_relative = true
+	_weapon.z_index = -100 if _weapon_behind else 100
+	_weapon.show_behind_parent = _weapon_behind
+
+
+# The character fingerprint: sorted-first root-bone uuid.
+func _char_key() -> String:
+	if _ani.rig == null:
+		return ""
+	var roots := []
+	for bone in _ani.rig.bones:
+		var parent: Variant = bone.get("parent_uuid")
+		if parent == null or (parent is String and String(parent).is_empty()):
+			roots.append(String(bone.get("uuid", "")))
+	roots.sort()
+	return String(roots[0]) if not roots.is_empty() else ""
+
+
+# Called on every rig load: apply this character's saved weapon, or
+# unload the previous character's.
+func _apply_attachment_for_rig() -> void:
+	var key := _char_key()
+	var saved: Variant = _attachments.get(key)
+	if saved is Dictionary:
+		_follow = saved
+		_weapon_behind = bool(_follow.get("behind", false))
+		for i in range(_weapon_pick.item_count):
+			if _weapon_pick.get_item_text(i) == String(_follow.get("weapon", "")):
+				_weapon_pick.select(i)
+		_spawn_weapon()
+	else:
+		_follow = {}
+		if _weapon != null:
+			_weapon.queue_free()
+			_weapon = null
 
 
 func _set_attach_mode(on: bool) -> void:
@@ -317,24 +374,26 @@ func _save_attachment() -> void:
 		"offset_y": local_off.y,
 		"rotation": local_rot,
 		"scale": _weapon.scale.x,
+		"behind": _weapon_behind,
 	}
-	var f := FileAccess.open(ATTACH_PATH, FileAccess.WRITE)
-	f.store_string(JSON.stringify(_follow, "  "))
+	var key := _char_key()
+	if not key.is_empty():
+		_attachments[key] = _follow
+		var f := FileAccess.open(ATTACH_PATH, FileAccess.WRITE)
+		f.store_string(JSON.stringify(_attachments, "  "))
 	_attach_btn.button_pressed = false  # exits attach mode -> live follow
 
 
 func _load_attachment() -> void:
+	# Boot: read the per-character store only; nothing spawns until a
+	# rig identifies its character (fixes the orphaned unrotated
+	# weapon on reopen).
 	if not FileAccess.file_exists(ATTACH_PATH):
 		return
 	var parsed: Variant = JSON.parse_string(
 		FileAccess.get_file_as_string(ATTACH_PATH))
-	if not parsed is Dictionary:
-		return
-	_follow = parsed
-	for i in range(_weapon_pick.item_count):
-		if _weapon_pick.get_item_text(i) == String(_follow.get("weapon", "")):
-			_weapon_pick.select(i)
-	_spawn_weapon()
+	if parsed is Dictionary:
+		_attachments = parsed
 
 
 func _read_presets() -> Dictionary:
@@ -480,6 +539,7 @@ func _load_rig(path: String) -> void:
 		_ani.set_current_frame(0.0)
 		_ani.play()
 		_refresh_bone_list()
+		_apply_attachment_for_rig()
 
 
 func _set_light(axis: int, v: float) -> void:
