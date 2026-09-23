@@ -215,6 +215,14 @@ var _layer_last_event_frame := -1
 # beam): the OVERLAY playhead parks on this frame until released
 # while the base clip keeps running underneath. -1 = no hold.
 var _layer_hold := -1.0
+# Bone aiming (2026-09-23, Seraph's cursor-following fireball arm):
+# per-bone WORLD-rotation targets blended over the animated pose
+# during the FK walk. Children keep their ANIMATED locals relative
+# to the aimed bone, so a throw clip plays out along the aim
+# direction. Keyed by uuid; angles are RIG-space (callers convert
+# from global - PlayerVisual/playground use to_local, which also
+# handles the facing flip).
+var _aim_by_uuid: Dictionary = {}
 
 var _cloth_uuids: Dictionary = {}
 # uuid -> sync key. Cloth bones whose names differ ONLY by a layer
@@ -436,6 +444,40 @@ func play_layer(
 	_layer_last_event_frame = -1
 	_layer_hold = -1.0
 	return true
+
+
+## Aim the bone NAMED [bone_name] (case-insensitive substring) at a
+## RIG-space world rotation, blended by [weight] (1 = full override
+## of the animated direction; children still animate relative to
+## it). Call per-frame with a fresh angle to track a moving target.
+func set_bone_aim(
+	bone_name: String, rig_angle: float, weight: float = 1.0
+) -> bool:
+	var uuid := _find_bone_uuid(bone_name)
+	if uuid.is_empty():
+		return false
+	_aim_by_uuid[uuid] = {"angle": rig_angle, "weight": clampf(weight, 0.0, 1.0)}
+	return true
+
+
+func clear_bone_aim(bone_name: String) -> void:
+	var uuid := _find_bone_uuid(bone_name)
+	if not uuid.is_empty():
+		_aim_by_uuid.erase(uuid)
+
+
+func clear_all_aims() -> void:
+	_aim_by_uuid.clear()
+
+
+func _find_bone_uuid(bone_name: String) -> String:
+	if rig == null:
+		return ""
+	var needle := bone_name.to_lower()
+	for bone in rig.bones:
+		if String(bone.get("name", "")).to_lower().contains(needle):
+			return String(bone.get("uuid", ""))
+	return ""
 
 
 ## Park the overlay playhead at [frame] until release_layer_hold()
@@ -801,6 +843,7 @@ func _rebuild_indices() -> void:
 	_cloth_deviation.clear()
 	_cloth_stepped.clear()
 	_clear_layer()
+	_aim_by_uuid.clear()
 
 	if rig == null:
 		_cloth_uuids.clear()
@@ -1388,6 +1431,13 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 	# tool-driven evaluations render the pose as authored.
 	if cloth_enabled and _cloth_dt > 0.0 and _cloth_uuids.has(uuid):
 		world_rotation = _cloth_sim(uuid, world_start, world_rotation, scaled_length)
+
+	# Bone aim: blend the animated world rotation toward the target;
+	# children composed after this inherit the aimed direction.
+	var aim: Variant = _aim_by_uuid.get(uuid)
+	if aim != null:
+		world_rotation = lerp_angle(
+			world_rotation, float(aim.angle), float(aim.weight))
 
 	var world_end := world_start + Vector2(
 		scaled_length * cos(world_rotation),

@@ -76,6 +76,10 @@ var _overlay_dialog: FileDialog
 var _overlay_btn: Button
 var _layer_bone_pick: OptionButton
 var _layer_hold_frame := -1.0
+# Cursor-aim testing: per-frame set_bone_aim at the mouse.
+var _aim_enabled := false
+var _aim_bone_pick: OptionButton
+var _aim_weight := 1.0
 const WEAPONS_DIR := "res://assets/weapons"
 const ATTACH_PATH := "user://weapon_attachments.json"
 const DRAG_SPEED_PER_PX := 3.0  # px/s of motion per px of deflection
@@ -120,6 +124,14 @@ func _process(delta: float) -> void:
 	elif _sway:
 		_sway_t += delta
 		_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
+	# Cursor aim: feed the mouse to the selected bone every frame.
+	if _aim_enabled and _ani.rig != null and _aim_bone_pick.selected >= 0:
+		var aim_bone := _aim_bone_pick.get_item_text(_aim_bone_pick.selected)
+		var bone_origin: Vector2 = \
+			_ani.get_bone_world_transform(aim_bone).origin
+		var local_target := _ani.to_local(get_global_mouse_position())
+		_ani.set_bone_aim(
+			aim_bone, (local_target - bone_origin).angle(), _aim_weight)
 	# Live weapon follow: re-derive placement from the hand bone's
 	# evaluated transform every frame — what the game will do.
 	if _weapon != null and not _attach_mode and not _follow.is_empty():
@@ -240,6 +252,14 @@ func _build_ui() -> void:
 				_ani.set_layer_hold(_layer_hold_frame))
 	_button("Release hold", func() -> void: _ani.release_layer_hold())
 	_button("Stop layer", func() -> void: _ani.stop_layer(0.1))
+	_aim_bone_pick = OptionButton.new()
+	_target.add_child(_aim_bone_pick)
+	_toggle("Aim bone at mouse cursor", false, func(v: bool) -> void:
+		_aim_enabled = v
+		if not v:
+			_ani.clear_all_aims())
+	_slider("Aim weight", 0.0, 1.0, 1.0,
+		func(v: float) -> void: _aim_weight = v)
 
 	_header("Weapon")
 	_weapon_pick = OptionButton.new()
@@ -354,6 +374,19 @@ func _refresh_bone_list() -> void:
 		idx += 1
 	if _layer_bone_pick.item_count > 0:
 		_layer_bone_pick.select(default_idx)
+	_aim_bone_pick.clear()
+	var aim_default := 0
+	var aim_idx := 0
+	for bone in _ani.rig.bones:
+		var bn := String(bone.get("name", ""))
+		if bn.is_empty():
+			continue
+		_aim_bone_pick.add_item(bn)
+		if aim_default == 0 and bn.containsn("arm upper"):
+			aim_default = aim_idx
+		aim_idx += 1
+	if _aim_bone_pick.item_count > 0:
+		_aim_bone_pick.select(aim_default)
 
 
 func _spawn_weapon() -> void:
