@@ -29,6 +29,8 @@ signal animation_looped
 # events array (spec §8.3). Multiple events at the same frame fire
 # in array order, each via its own emission of this signal.
 signal animation_event(event_name: String, payload: String)
+## The body-layer overlay finished (played through + faded out).
+signal layer_finished
 
 # ── Inspector properties ───────────────────────────────────────────
 
@@ -192,6 +194,23 @@ var _current_frame: float = 0.0
 const CLASS_CLOTH := 0
 const CLASS_HAIR := 1
 const CLASS_LIMB := 2
+
+# ── Body layering (2026-09-23): a second clip drives a SUBTREE of
+# bones (mask root + descendants) on its own playhead while the
+# base clip keeps the rest — run with the legs, attack with the
+# upper body. Bones match across clips by uuid (same-sprig exports,
+# the crossfade identity). Masked bones the overlay never keys stay
+# base-driven. The overlay plays ONCE, holds its last pose through
+# a short weight fade, then clears and emits layer_finished. Enter
+# is faded the same way, so arms never pop.
+var _layer_rig: AniRigResource
+var _layer_frames_by_bone: Dictionary = {}
+var _layer_mask: Dictionary = {}
+var _layer_frame := 0.0
+var _layer_weight := 0.0
+var _layer_fade := 0.1
+var _layer_fading_out := false
+var _layer_last_event_frame := -1
 
 var _cloth_uuids: Dictionary = {}
 # uuid -> sync key. Cloth bones whose names differ ONLY by a layer
@@ -368,6 +387,124 @@ func _fade_target_weight() -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+## Start a body-layer overlay: [overlay] drives the subtree rooted
+## at the bone NAMED [mask_root_name] (case-insensitive substring
+## match; first match wins) while the base clip keeps everything
+## else. Returns false if the mask root can't be found. [fade] is
+## the enter/exit weight ramp in seconds.
+func play_layer(
+	overlay: AniRigResource, mask_root_name: String, fade: float = 0.1
+) -> bool:
+	if overlay == null or rig == null:
+		return false
+	var root_uuid := ""
+	var needle := mask_root_name.to_lower()
+	for bone in rig.bones:
+		if String(bone.get("name", "")).to_lower().contains(needle):
+			root_uuid = String(bone.get("uuid", ""))
+			break
+	if root_uuid.is_empty():
+		return false
+	_layer_mask.clear()
+	var queue := [root_uuid]
+	while not queue.is_empty():
+		var uuid: String = queue.pop_back()
+		_layer_mask[uuid] = true
+		for child_uuid in _bone_children.get(uuid, []):
+			queue.append(child_uuid)
+	_layer_frames_by_bone.clear()
+	for kf in overlay.keyframes:
+		var bu: String = kf.bone_uuid
+		if bu.is_empty():
+			continue
+		if not _layer_frames_by_bone.has(bu):
+			_layer_frames_by_bone[bu] = []
+		(_layer_frames_by_bone[bu] as Array).append(kf)
+	for bu in _layer_frames_by_bone:
+		(_layer_frames_by_bone[bu] as Array).sort_custom(
+			func(a, b): return int(a.frame_number) < int(b.frame_number)
+		)
+	_layer_rig = overlay
+	_layer_frame = 0.0
+	_layer_weight = 0.0
+	_layer_fade = maxf(fade, 0.001)
+	_layer_fading_out = false
+	_layer_last_event_frame = -1
+	return true
+
+
+## Cancel the overlay early (fades out from wherever it is).
+func stop_layer(fade: float = 0.1) -> void:
+	if _layer_rig == null:
+		return
+	_layer_fade = maxf(fade, 0.001)
+	_layer_fading_out = true
+
+
+func has_layer() -> bool:
+	return _layer_rig != null
+
+
+func _clear_layer() -> void:
+	_layer_rig = null
+	_layer_frames_by_bone.clear()
+	_layer_mask.clear()
+	_layer_weight = 0.0
+	_layer_fading_out = false
+
+
+func _advance_layer(delta: float) -> void:
+	if _layer_rig == null:
+		return
+	var prev := _layer_frame
+	_layer_frame = minf(
+		_layer_frame + delta * float(_layer_rig.frame_rate) * speed,
+		float(_layer_rig.total_frames - 1))
+	# Overlay events fire from the OVERLAY playhead (attack hit
+	# frames land mid-run). One-shot: no wrap handling needed.
+	for ev in _layer_rig.events:
+		var f := int(ev.get("frame", 0))
+		if f > int(prev) and f <= int(_layer_frame) 				and f > _layer_last_event_frame:
+			_layer_last_event_frame = f
+			emit_signal("animation_event",
+				String(ev.get("name", "")), String(ev.get("payload", "")))
+	if not _layer_fading_out:
+		_layer_weight = minf(_layer_weight + delta / _layer_fade, 1.0)
+		if _layer_frame >= float(_layer_rig.total_frames - 1):
+			_layer_fading_out = true
+	else:
+		_layer_weight -= delta / _layer_fade
+		if _layer_weight <= 0.0:
+			_clear_layer()
+			emit_signal("layer_finished")
+
+
+## Local pose source for the FK walk: base (crossfade-aware) local,
+## overridden/blended by the layer overlay for masked bones. Masked
+## bones the overlay never keys stay base-driven.
+func _local_for_bone(uuid: String, frames: Array, frame: float) -> Dictionary:
+	var base := _blended_local(uuid, frames, frame)
+	if _layer_rig == null or _layer_weight <= 0.0 			or not _layer_mask.has(uuid):
+		return base
+	var lf: Array = _layer_frames_by_bone.get(uuid, [])
+	if lf.is_empty():
+		return base
+	var ov := AniPoseEvaluator.interpolate(
+		lf, _layer_frame, _layer_rig.total_frames, false)
+	if _layer_weight >= 1.0:
+		return ov
+	var w := _layer_weight
+	return {
+		"rotation": lerp_angle(base.rotation, ov.rotation, w),
+		"translate_x": lerpf(base.translate_x, ov.translate_x, w),
+		"translate_y": lerpf(base.translate_y, ov.translate_y, w),
+		"scale_x": lerpf(base.scale_x, ov.scale_x, w),
+		"scale_y": lerpf(base.scale_y, ov.scale_y, w),
+		"ik_target_x": _lerp_ik(base.ik_target_x, ov.ik_target_x, w),
+		"ik_target_y": _lerp_ik(base.ik_target_y, ov.ik_target_y, w),
+	}
+
+
 # Local pose for [uuid] on the CURRENT rig, blended with the outgoing
 # clip while a cross-fade is active. Bones match by uuid (all clips
 # of a character export from the same project, so uuids line up); a
@@ -514,6 +651,7 @@ func _process(delta: float) -> void:
 			emit_signal("animation_finished")
 
 	_dispatch_events(int(_current_frame), wrapped)
+	_advance_layer(delta)
 
 	_evaluate_pose(_current_frame)
 	# Sim only advances inside dt-carrying passes; scrubs / external
@@ -642,6 +780,7 @@ func _rebuild_indices() -> void:
 	_cloth_prev.clear()
 	_cloth_deviation.clear()
 	_cloth_stepped.clear()
+	_clear_layer()
 
 	if rig == null:
 		_cloth_uuids.clear()
@@ -1064,7 +1203,7 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 		return
 
 	var frames: Array = _frames_by_bone.get(uuid, [])
-	var p := _blended_local(uuid, frames, frame)
+	var p := _local_for_bone(uuid, frames, frame)
 
 	var translate_x: float = p.translate_x
 	var translate_y: float = p.translate_y
@@ -1172,7 +1311,7 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 			# translate so the target rides along with the body.
 			var target := Vector2(float(chain.target_x), float(chain.target_y))
 			var leaf_frames: Array = _frames_by_bone.get(chain_child, [])
-			var interp := _blended_local(chain_child, leaf_frames, frame)
+			var interp := _local_for_bone(chain_child, leaf_frames, frame)
 			if not is_nan(interp.ik_target_x):
 				target.x = interp.ik_target_x
 			if not is_nan(interp.ik_target_y):
@@ -1189,7 +1328,11 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 			local_rotation = _constrain_rotation(bone, rotations.x - parent_base_rotation)
 			ik_child_uuid = chain_child
 			ik_child_local = _constrain_rotation(child_bone, rotations.y - rotations.x)
-		elif frames.is_empty():
+		elif frames.is_empty() and not (
+			_layer_rig != null and _layer_weight > 0.0
+			and _layer_mask.has(uuid)
+			and not (_layer_frames_by_bone.get(uuid, []) as Array).is_empty()
+		):
 			local_rotation = float(bone.rotation)
 		else:
 			local_rotation = p.rotation

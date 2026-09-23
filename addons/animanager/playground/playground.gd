@@ -69,6 +69,12 @@ var _follow: Dictionary = {}  # bone / offset_x/y / rotation / scale / behind
 # character unloads it (2026-09-23).
 var _attachments: Dictionary = {}
 var _weapon_behind := false
+# Body-layer testing (2026-09-23): load a second clip and play it as
+# an upper-body overlay on whatever the base is doing.
+var _overlay_rig: AniRigResource
+var _overlay_dialog: FileDialog
+var _overlay_btn: Button
+var _layer_bone_pick: OptionButton
 const WEAPONS_DIR := "res://assets/weapons"
 const ATTACH_PATH := "user://weapon_attachments.json"
 const DRAG_SPEED_PER_PX := 3.0  # px/s of motion per px of deflection
@@ -214,6 +220,21 @@ func _build_ui() -> void:
 	_slider("Limb inertia", 0.0, 4.0, _ani.limb_inertia,
 		func(v: float) -> void: _ani.limb_inertia = v)
 
+	_header("Body layer (attack-while-moving)")
+	_overlay_btn = Button.new()
+	_overlay_btn.text = "Load overlay clip..."
+	_overlay_btn.pressed.connect(
+		func() -> void: _overlay_dialog.popup_centered_ratio(0.7))
+	_target.add_child(_overlay_btn)
+	_layer_bone_pick = OptionButton.new()
+	_target.add_child(_layer_bone_pick)
+	_button("Play layered (once)", func() -> void:
+		if _overlay_rig != null and _layer_bone_pick.selected >= 0:
+			_ani.play_layer(_overlay_rig,
+				_layer_bone_pick.get_item_text(_layer_bone_pick.selected),
+				0.12))
+	_button("Stop layer", func() -> void: _ani.stop_layer(0.1))
+
 	_header("Weapon")
 	_weapon_pick = OptionButton.new()
 	_target.add_child(_weapon_pick)
@@ -261,6 +282,18 @@ func _build_ui() -> void:
 	_dialog.file_selected.connect(_load_rig)
 	layer.add_child(_dialog)
 
+	_overlay_dialog = FileDialog.new()
+	_overlay_dialog.access = FileDialog.ACCESS_RESOURCES
+	_overlay_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	_overlay_dialog.filters = ["*.animrig, *.rig, *.tres ; AniManager rigs"]
+	_overlay_dialog.current_dir = _dialog.current_dir
+	_overlay_dialog.file_selected.connect(func(path: String) -> void:
+		var res := load(path)
+		if res is AniRigResource:
+			_overlay_rig = res
+			_overlay_btn.text = "Overlay: " + path.get_file())
+	layer.add_child(_overlay_dialog)
+
 	_joy = VirtualJoystick.new()
 	_joy.anchor_left = 0.0
 	_joy.anchor_right = 0.0
@@ -302,6 +335,19 @@ func _refresh_bone_list() -> void:
 			others.append(n)
 	for n in hands + others:
 		_bone_pick.add_item(n)
+	_layer_bone_pick.clear()
+	var default_idx := 0
+	var idx := 0
+	for bone in _ani.rig.bones:
+		var n := String(bone.get("name", ""))
+		if n.is_empty():
+			continue
+		_layer_bone_pick.add_item(n)
+		if n.containsn("torso upper") 				or (default_idx == 0 and n.containsn("torso")):
+			default_idx = idx
+		idx += 1
+	if _layer_bone_pick.item_count > 0:
+		_layer_bone_pick.select(default_idx)
 
 
 func _spawn_weapon() -> void:
