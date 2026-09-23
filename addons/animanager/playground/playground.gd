@@ -75,6 +75,7 @@ var _overlay_rig: AniRigResource
 var _overlay_dialog: FileDialog
 var _overlay_btn: Button
 var _layer_bone_pick: OptionButton
+var _layer_hold_frame := -1.0
 const WEAPONS_DIR := "res://assets/weapons"
 const ATTACH_PATH := "user://weapon_attachments.json"
 const DRAG_SPEED_PER_PX := 3.0  # px/s of motion per px of deflection
@@ -228,11 +229,16 @@ func _build_ui() -> void:
 	_target.add_child(_overlay_btn)
 	_layer_bone_pick = OptionButton.new()
 	_target.add_child(_layer_bone_pick)
+	_slider("Hold at frame (-1 = off)", -1.0, 60.0, -1.0,
+		func(v: float) -> void: _layer_hold_frame = roundf(v))
 	_button("Play layered (once)", func() -> void:
 		if _overlay_rig != null and _layer_bone_pick.selected >= 0:
-			_ani.play_layer(_overlay_rig,
-				_layer_bone_pick.get_item_text(_layer_bone_pick.selected),
-				0.12))
+			if _ani.play_layer(_overlay_rig,
+					_layer_bone_pick.get_item_text(
+						_layer_bone_pick.selected), 0.12) \
+					and _layer_hold_frame >= 0.0:
+				_ani.set_layer_hold(_layer_hold_frame))
+	_button("Release hold", func() -> void: _ani.release_layer_hold())
 	_button("Stop layer", func() -> void: _ani.stop_layer(0.1))
 
 	_header("Weapon")

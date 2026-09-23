@@ -211,6 +211,10 @@ var _layer_weight := 0.0
 var _layer_fade := 0.1
 var _layer_fading_out := false
 var _layer_last_event_frame := -1
+# Charge-hold for the layer (2026-09-23, Seraph's hold-to-cast
+# beam): the OVERLAY playhead parks on this frame until released
+# while the base clip keeps running underneath. -1 = no hold.
+var _layer_hold := -1.0
 
 var _cloth_uuids: Dictionary = {}
 # uuid -> sync key. Cloth bones whose names differ ONLY by a layer
@@ -430,7 +434,20 @@ func play_layer(
 	_layer_fade = maxf(fade, 0.001)
 	_layer_fading_out = false
 	_layer_last_event_frame = -1
+	_layer_hold = -1.0
 	return true
+
+
+## Park the overlay playhead at [frame] until release_layer_hold()
+## — the base clip keeps running underneath (hold-to-cast attacks).
+## Call any time while a layer is active (before it passes [frame]).
+func set_layer_hold(frame: float) -> void:
+	_layer_hold = frame
+
+
+## Resume the held overlay toward its end (and normal finish).
+func release_layer_hold() -> void:
+	_layer_hold = -1.0
 
 
 ## Cancel the overlay early (fades out from wherever it is).
@@ -457,9 +474,11 @@ func _advance_layer(delta: float) -> void:
 	if _layer_rig == null:
 		return
 	var prev := _layer_frame
+	var cap := float(_layer_rig.total_frames - 1)
+	if _layer_hold >= 0.0:
+		cap = minf(cap, _layer_hold)
 	_layer_frame = minf(
-		_layer_frame + delta * float(_layer_rig.frame_rate) * speed,
-		float(_layer_rig.total_frames - 1))
+		_layer_frame + delta * float(_layer_rig.frame_rate) * speed, cap)
 	# Overlay events fire from the OVERLAY playhead (attack hit
 	# frames land mid-run). One-shot: no wrap handling needed.
 	for ev in _layer_rig.events:
@@ -470,7 +489,8 @@ func _advance_layer(delta: float) -> void:
 				String(ev.get("name", "")), String(ev.get("payload", "")))
 	if not _layer_fading_out:
 		_layer_weight = minf(_layer_weight + delta / _layer_fade, 1.0)
-		if _layer_frame >= float(_layer_rig.total_frames - 1):
+		if _layer_hold < 0.0 \
+				and _layer_frame >= float(_layer_rig.total_frames - 1):
 			_layer_fading_out = true
 	else:
 		_layer_weight -= delta / _layer_fade
