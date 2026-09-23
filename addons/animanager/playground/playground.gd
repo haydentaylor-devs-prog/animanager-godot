@@ -169,7 +169,8 @@ func _build_ui() -> void:
 	_preset_name = LineEdit.new()
 	_preset_name.placeholder_text = "Preset name..."
 	_target.add_child(_preset_name)
-	_button("Save current settings", _save_preset)
+	_button("Save new preset", _save_preset)
+	_button("Overwrite current preset", _overwrite_preset)
 	_preset_pick = OptionButton.new()
 	_target.add_child(_preset_pick)
 	_refresh_preset_list()
@@ -432,10 +433,7 @@ func _refresh_preset_list() -> void:
 		_preset_pick.add_item(String(preset_name))
 
 
-func _save_preset() -> void:
-	var preset_name := _preset_name.text.strip_edges()
-	if preset_name.is_empty():
-		return
+func _collect_values() -> Dictionary:
 	var values := {}
 	for label in _all_controls:
 		var ctrl: Control = _all_controls[label]
@@ -443,13 +441,30 @@ func _save_preset() -> void:
 			values[label] = (ctrl as HSlider).value
 		elif ctrl is CheckBox:
 			values[label] = (ctrl as CheckBox).button_pressed
+	return values
+
+
+func _store_preset(preset_name: String) -> void:
 	var presets := _read_presets()
-	presets[preset_name] = values
+	presets[preset_name] = _collect_values()
 	_write_presets(presets)
 	_refresh_preset_list()
 	for i in range(_preset_pick.item_count):
 		if _preset_pick.get_item_text(i) == preset_name:
 			_preset_pick.select(i)
+
+
+func _save_preset() -> void:
+	var preset_name := _preset_name.text.strip_edges()
+	if preset_name.is_empty():
+		return
+	_store_preset(preset_name)
+
+
+func _overwrite_preset() -> void:
+	if _preset_pick.selected < 0:
+		return
+	_store_preset(_preset_pick.get_item_text(_preset_pick.selected))
 
 
 func _load_preset() -> void:
