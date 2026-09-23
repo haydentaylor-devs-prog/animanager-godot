@@ -37,6 +37,10 @@ var _drag_current: Vector2 = Vector2.ZERO
 # controls (setting the control re-fires its signal, so the node
 # properties and labels update through the normal path).
 var _section_controls: Array = []
+# Controls are added to _target: _panel before any header, then each
+# header's collapsible VBox (click the header to fold a section -
+# accidental mid-test tweaks of the wrong section, 2026-09-23).
+var _target: Container
 # Named presets (2026-09-20): every slider/toggle also registers in a
 # label-keyed map; Save snapshots their live values to a JSON at
 # user://playground_presets.json, Load pushes values back through
@@ -67,8 +71,12 @@ var _attachments: Dictionary = {}
 var _weapon_behind := false
 const WEAPONS_DIR := "res://assets/weapons"
 const ATTACH_PATH := "user://weapon_attachments.json"
-const DRAG_SPEED_PER_PX := 4.0  # px/s of motion per px of deflection
-const DRAG_MAX_DEFLECT := 150.0
+const DRAG_SPEED_PER_PX := 3.0  # px/s of motion per px of deflection
+const DRAG_MAX_DEFLECT := 100.0
+# On-screen joystick (2026-09-23): a literal transparent stick at the
+# bottom-left drives character movement; full tilt = the same top
+# speed as the old invisible joystick (MAX_DEFLECT * SPEED_PER_PX).
+var _joy: VirtualJoystick
 
 
 func _ready() -> void:
@@ -98,13 +106,13 @@ func _center_rig() -> void:
 
 
 func _process(delta: float) -> void:
-	if _sway and not _dragging:
+	var joy_tilt := _joy.deflect if _joy != null else Vector2.ZERO
+	if joy_tilt != Vector2.ZERO:
+		_ani.position += joy_tilt \
+			* (DRAG_MAX_DEFLECT * DRAG_SPEED_PER_PX) * delta
+	elif _sway:
 		_sway_t += delta
 		_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
-	elif _dragging and not _attach_mode:
-		var stick := (_drag_current - _drag_origin).limit_length(
-			DRAG_MAX_DEFLECT)
-		_ani.position += stick * DRAG_SPEED_PER_PX * delta
 	# Live weapon follow: re-derive placement from the hand bone's
 	# evaluated transform every frame — what the game will do.
 	if _weapon != null and not _attach_mode and not _follow.is_empty():
@@ -117,14 +125,11 @@ func _process(delta: float) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Drag the character around to feel the cloth react to real motion.
+	# Character movement lives on the on-screen joystick now; free
+	# mouse drag remains only for ATTACH MODE (weapon placement).
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		_dragging = event.pressed
-		if _dragging:
-			_drag_origin = event.position
-			_drag_current = event.position
 	elif event is InputEventMouseMotion and _dragging:
-		_drag_current = event.position
 		# Attach mode: the drag moves the WEAPON, in rig-local units
 		# (signed division handles zoom AND the facing flip).
 		if _attach_mode and _weapon != null:
@@ -152,6 +157,7 @@ func _build_ui() -> void:
 	_panel = VBoxContainer.new()
 	_panel.add_theme_constant_override("separation", 6)
 	bg.add_child(_panel)
+	_target = _panel
 
 	_button("Load Rig...", _pick_rig)
 	_readout = Label.new()
@@ -162,10 +168,10 @@ func _build_ui() -> void:
 	_header("Presets")
 	_preset_name = LineEdit.new()
 	_preset_name.placeholder_text = "Preset name..."
-	_panel.add_child(_preset_name)
+	_target.add_child(_preset_name)
 	_button("Save current settings", _save_preset)
 	_preset_pick = OptionButton.new()
-	_panel.add_child(_preset_pick)
+	_target.add_child(_preset_pick)
 	_refresh_preset_list()
 	_button("Load selected", _load_preset)
 	_button("Delete selected", _delete_preset)
@@ -209,16 +215,16 @@ func _build_ui() -> void:
 
 	_header("Weapon")
 	_weapon_pick = OptionButton.new()
-	_panel.add_child(_weapon_pick)
+	_target.add_child(_weapon_pick)
 	_refresh_weapon_list()
 	_weapon_pick.item_selected.connect(func(_i: int) -> void: _spawn_weapon())
 	_bone_pick = OptionButton.new()
-	_panel.add_child(_bone_pick)
+	_target.add_child(_bone_pick)
 	_attach_btn = Button.new()
 	_attach_btn.text = "Attach mode (freeze + drag weapon)"
 	_attach_btn.toggle_mode = true
 	_attach_btn.toggled.connect(_set_attach_mode)
-	_panel.add_child(_attach_btn)
+	_target.add_child(_attach_btn)
 	_toggle("Draw behind character", false, func(v: bool) -> void:
 		_weapon_behind = v
 		_apply_weapon_layer())
@@ -253,6 +259,17 @@ func _build_ui() -> void:
 		"res://animations") else "res://"
 	_dialog.file_selected.connect(_load_rig)
 	layer.add_child(_dialog)
+
+	_joy = VirtualJoystick.new()
+	_joy.anchor_left = 0.0
+	_joy.anchor_right = 0.0
+	_joy.anchor_top = 1.0
+	_joy.anchor_bottom = 1.0
+	_joy.offset_left = 24
+	_joy.offset_right = 24 + 170
+	_joy.offset_top = -194
+	_joy.offset_bottom = -24
+	layer.add_child(_joy)
 
 
 func _refresh_weapon_list() -> void:
@@ -474,16 +491,25 @@ func _end_section() -> void:
 				(pair[0] as HSlider).value = pair[1]
 			elif pair[0] is CheckBox:
 				(pair[0] as CheckBox).button_pressed = pair[1])
-	_panel.add_child(b)
+	_target.add_child(b)
 
 
 func _header(text: String) -> void:
 	_end_section()
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", 15)
-	l.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
-	_panel.add_child(l)
+	var btn := Button.new()
+	btn.flat = true
+	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	btn.add_theme_font_size_override("font_size", 15)
+	btn.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	btn.text = "v  " + text
+	btn.pressed.connect(func() -> void:
+		box.visible = not box.visible
+		btn.text = ("v  " if box.visible else ">  ") + text)
+	_panel.add_child(btn)
+	_panel.add_child(box)
+	_target = box
 
 
 func _slider(
@@ -505,7 +531,7 @@ func _slider(
 	s.value_changed.connect(update)
 	update.call(value)
 	row.add_child(s)
-	_panel.add_child(row)
+	_target.add_child(row)
 	_section_controls.append([s, value])
 	_all_controls[label_text] = s
 
@@ -515,7 +541,7 @@ func _toggle(text: String, initial: bool, on_change: Callable) -> void:
 	c.text = text
 	c.button_pressed = initial
 	c.toggled.connect(on_change)
-	_panel.add_child(c)
+	_target.add_child(c)
 	_section_controls.append([c, initial])
 	_all_controls[text] = c
 
@@ -524,7 +550,7 @@ func _button(text: String, on_press: Callable) -> void:
 	var b := Button.new()
 	b.text = text
 	b.pressed.connect(on_press)
-	_panel.add_child(b)
+	_target.add_child(b)
 
 
 func _pick_rig() -> void:
@@ -589,3 +615,37 @@ func _take_shot(path: String) -> void:
 	var img := get_viewport().get_texture().get_image()
 	img.save_png(path)
 	get_tree().quit()
+
+
+## Literal transparent on-screen joystick: click inside, drag to
+## tilt; the knob follows and snaps back on release. `deflect` is
+## the normalized (0..1) tilt vector the playground reads per frame.
+class VirtualJoystick extends Control:
+	var deflect := Vector2.ZERO
+	var _active := false
+	const RADIUS := 70.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_STOP
+
+	func _gui_input(event: InputEvent) -> void:
+		var center := size * 0.5
+		if event is InputEventMouseButton \
+				and event.button_index == MOUSE_BUTTON_LEFT:
+			if event.pressed and event.position.distance_to(center) <= RADIUS:
+				_active = true
+				deflect = ((event.position - center) / RADIUS).limit_length(1.0)
+			elif not event.pressed:
+				_active = false
+				deflect = Vector2.ZERO
+			queue_redraw()
+		elif event is InputEventMouseMotion and _active:
+			deflect = ((event.position - center) / RADIUS).limit_length(1.0)
+			queue_redraw()
+
+	func _draw() -> void:
+		var center := size * 0.5
+		draw_circle(center, RADIUS, Color(1, 1, 1, 0.06))
+		draw_arc(center, RADIUS, 0.0, TAU, 48, Color(1, 1, 1, 0.18), 2.0)
+		draw_circle(center + deflect * RADIUS, 22.0,
+			Color(1, 1, 1, 0.28 if _active else 0.16))
