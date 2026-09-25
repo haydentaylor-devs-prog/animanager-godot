@@ -1,64 +1,101 @@
-# AniManager — Godot 4 Importer
+# AniManager — Godot 4 Runtime
 
 [![Godot 4.x](https://img.shields.io/badge/Godot-4.x-blue.svg)](https://godotengine.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A Godot 4 editor plugin that imports `.rig` files exported from
-[AniManager](https://github.com/haydentaylor-devs-prog/animanager)
-and plays them back as 2D skeletal animations.
+**2D skeletal animation runtime for Godot 4** — the game-engine half
+of a tablet-to-game pipeline. Characters are drawn, rigged, and
+animated in [AniMate](https://github.com/haydentaylor-devs-prog/animanager)
+(a mobile animation studio for iPad / Android tablets); this plugin
+imports the exported `.animrig` files and plays them back with
+runtime features the authoring app doesn't need to know about:
+cross-fades, procedural cloth & hair physics, upper/lower-body
+animation layering, cursor-aimed limbs, and normal-mapped 2D
+lighting.
 
-`AniManager` is a mobile 2D skeletal animation authoring tool aimed
-at artists who want a Procreate-flavored workflow instead of paying
-for ToonBoom Harmony. This plugin is the bridge that lets you take
-animations you authored on a tablet and drop them straight into a
-Godot game project.
+![Seraph in the tuning playground — cloth, hair and limb physics reacting to movement](docs/media/hero.gif)
 
 ---
 
-## What it does
+## Features
 
-- **Imports `.rig` files** as native Godot `Resource`s. Drag a
-  `.rig` into your project and Godot generates a `.tres` you can
-  point a node at.
-- **Plays back animations** through an `AniAnimationPlayer2D` node:
-  `play()`, `pause()`, `stop()`, `set_current_frame()`, looping,
-  speed control.
-- **Renders bones as debug lines** when you haven't bound sprites
-  yet, so you can verify the rig loaded correctly before doing any
-  art work.
-- **Binds sprites to bones** via a simple `Dictionary` (bone UUID
-  or bone name → `Texture2D`).
-- **Supports IK** (the v1.1 `ikChains` extension) — two-bone
-  analytic solver runs during the FK walk each frame.
-- **Honors all interpolation types** the spec defines: linear,
-  ease in / out / in-out, stepped, custom cubic bezier (with
-  Newton-Raphson `x → t` solver matching the AniManager reference).
-- **Shaded mode** (the v1.6 shade-mask sidecars): set `shaded = true`
-  and every bound part renders through its own `ShaderMaterial` —
-  metal pixels get a matcap reflection, lit pixels get normal-mapped
-  diffuse from the baked normal map, emissive pixels glow, flat
-  pixels stay exactly as painted. Masks auto-bind from the
-  `.animrig` bundle (or `<bone>.material.png` / `<bone>.normal.png`
-  files next to a loose sprite pack); parts without masks render as
-  plain albedo. Drive `light_direction` from your game for a moving
-  light; supply a `matcap` texture or use the built-in chrome
-  fallback.
+**Import & playback**
+- Drop a single `.animrig` file into your project — it imports as a
+  native Godot `Resource` with every part texture embedded, and the
+  `AniAnimationPlayer2D` node plays it: looping, speed control,
+  sub-frame scrubbing, frame events as signals.
+- Full interpolation support: linear, ease in/out/in-out, stepped,
+  and custom cubic bezier (Newton-Raphson solver matching the
+  authoring app bit-for-bit), with shortest-arc angle blending.
+- Two-bone analytic IK solved during the FK walk, with keyframable
+  per-frame targets and joint rotation constraints.
+
+**Runtime animation systems** (things keyframes can't do)
+- **Cross-fades** — blend from any clip to any clip from any frame
+  (`crossfade_to`). Authored transition clips take precedence;
+  everything else blends procedurally. Interrupt a run with a dodge
+  and nothing pops.
+
+  ![Run interrupted into a dodge — procedural cross-fade](docs/media/crossfade.gif)
+
+- **Body layering** — play a second clip on a bone *subtree* while
+  the base clip keeps the rest: run with the legs, attack with the
+  upper body (`play_layer`). Faded enter/exit, overlay hit-events
+  fire mid-run, and a charge-hold can park the overlay on a casting
+  pose until released (`set_layer_hold`).
+
+  ![Attack playing on the upper body while the legs keep running](docs/media/body_layering.gif)
+
+- **Bone aiming** — steer any bone toward a world direction while
+  its children keep playing their animation (`set_bone_aim`): a
+  throwing arm tracks the cursor while the hand animates the throw.
+
+  ![Arm tracking the mouse cursor while the idle plays](docs/media/bone_aim.gif)
+
+- **Cloth, hair & limb physics** — bones flagged by *naming
+  convention* (no export flags, no code) get verlet follow-through
+  simulation that reacts to real gameplay motion: dashes,
+  knockbacks, facing flips. Three material classes (cloth / hair /
+  limb) with independent tuning, and *sync groups* that keep the
+  front and back panels of a skirt or open coat swinging as one
+  sheet across z-layers. Zero per-clip authoring cost.
+
+  ![Dress, cape and ponytail trailing and settling](docs/media/cloth_sim.gif)
+
+- **Shaded mode** — parts painted with material/height masks in the
+  authoring app render through per-part shaders: metal picks up a
+  matcap reflection, lit pixels get normal-mapped diffuse from a
+  movable light, emissive glows, unpainted parts stay exactly as
+  drawn. Flat pixel art that responds to scene lighting.
+
+  ![Light direction sweeping across height-mapped armor](docs/media/shaded_mode.gif)
+
+**The tuning playground**
+An included scene (`addons/animanager/playground/playground.tscn`,
+run with F6) for dialing all of it in without a game around it:
+load any rig, excite the physics with an on-screen joystick,
+tune every parameter with live sliders, save named presets, fit a
+weapon to a hand bone visually (saved bone-relative, so it follows
+every clip), and test layered attacks + cursor aiming against the
+mouse.
+
+![The playground: character, joystick, and the full tuning panel](docs/media/playground.png)
 
 ---
 
 ## Requirements
 
-- Godot 4.0 or later (tested against 4.x master; please report
-  version-specific issues).
-- A `.rig` file produced by AniManager. The
-  [.rig spec doc](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md)
-  is the authoritative format reference.
-
----
+- Godot 4.x.
+- An `.animrig` (or `.rig` + `.parts/` folder) exported from
+  AniMate. The
+  [.rig spec](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md)
+  is the authoritative format reference (currently v1.6).
+- `examples/quarter_turn.rig` in this repo is a minimal rig for
+  verifying setup without the app.
 
 ## Installation
 
-From your Godot project root, in PowerShell or bash:
+Copy `addons/animanager/` into your project's `addons/` directory:
 
 ```powershell
 cd <your-godot-project>
@@ -68,224 +105,136 @@ Move-Item temp\addons\animanager addons\
 Remove-Item -Recurse -Force temp
 ```
 
-(bash users: `mkdir -p addons && cp -r temp/addons/animanager addons/ && rm -rf temp`)
+(bash: `mkdir -p addons && cp -r temp/addons/animanager addons/ && rm -rf temp`)
 
-Or download the latest release ZIP from this repo's Releases page
-and extract `addons/animanager/` into your project's `addons/`
-directory.
-
-### Then in Godot
-
-1. Open your project (or **Project → Reload Current Project** if
-   it was already open).
-2. **Project → Project Settings → Plugins** → tick **AniManager**.
-3. The editor will reimport any `.rig` files in your project tree
-   automatically.
-
-## Updating
-
-The plugin ships stable `.uid` sidecar files, so re-downloading
-won't break your scene references the way it did in early versions.
-
-The simplest update for any install style:
-
-```powershell
-cd <your-godot-project>
-git clone https://github.com/haydentaylor-devs-prog/animanager-godot.git temp
-Remove-Item -Recurse -Force addons\animanager
-Move-Item temp\addons\animanager addons\
-Remove-Item -Recurse -Force temp
-```
-
-Then **Project → Reload Current Project** in Godot. Scenes and
-imported `.rig` files reconnect automatically.
-
----
+Then in Godot: **Project → Project Settings → Plugins → tick
+AniManager**. Any `.rig`/`.animrig` files in the project reimport
+automatically. To update, replace the folder and
+**Project → Reload Current Project** — stable `.uid` sidecars keep
+scene references intact.
 
 ## Quick start
 
-1. Drop a `.rig` file into your Godot project (the
-   `examples/quarter_turn.rig` here is a one-bone smoothstep
-   rotation that's perfect for verifying setup).
-2. Godot auto-imports it as a `.tres`.
-3. Add an `AniAnimationPlayer2D` node to your scene
-   (**Create Node → AniAnimationPlayer2D**, under Node2D).
-4. In the inspector, set its **Rig** property to the imported
-   `.tres`.
-5. Tick **Auto Play** (or call `play()` from a script).
-6. Hit play. You should see a debug line bone rotating 90° over
-   half a second.
-
-### Binding sprites
-
-AniManager exports come in two shapes — both work with this plugin:
-
-**Option A — `.animrig` bundle (recommended, single file).** The
-bundle is a ZIP containing the rig JSON plus every part PNG. The
-plugin extracts the textures at import time and embeds them on the
-`AniRigResource`. Drop the `.animrig` in, assign it to your node's
-**Rig** property, and sprites auto-bind on assignment. No folder
-property to set. The Output panel prints
-`AniManager: auto-bound N sprite(s)` to confirm.
-
-**Option B — `.rig` + sister `.parts/` folder.** The original
-two-file shape — handy if you want to inspect or hand-tweak the
-PNGs in the project tree. Drop both into your project, set
-**Sprite Pack Folder** on the node to the imported `.parts/`
-folder, then assign **Rig**. Same auto-bind log line.
-
-Either flow handles the same animations identically; the bundle is
-just nicer to share. To override or supplement what auto-bind
-provides, set entries on `sprite_bindings` directly:
-
-```gdscript
-@onready var player := $AniAnimationPlayer2D
-
-func _ready() -> void:
-    # Auto-bind from the pack handles most bones; tweak specific
-    # ones in code:
-    player.sprite_bindings["Hand_R"] = preload("res://art/special_hand.png")
+```text
+1. Drop an .animrig into the project (auto-imports).
+2. Add an AniAnimationPlayer2D node (under Node2D in Create Node).
+3. Set its Rig property to the imported resource — part sprites
+   auto-bind from the bundle.
+4. Tick Auto Play (or call play() from a script).
 ```
 
-Explicit `sprite_bindings` entries take precedence — auto-bind
-never overwrites them. Keys can be either the bone's `uuid`
-(stable across exports, ugly) or its `name` (human-readable, must
-match the editor exactly). Name lookup is case-sensitive.
+![Dropping an .animrig and pressing play](docs/media/import_drop.gif)
 
-### Attaching effects to a bone
+Attach effects or weapons to bones:
 
 ```gdscript
 func _process(_delta: float) -> void:
-    var hand_transform := player.get_bone_world_transform("Hand_R")
-    $Particles.global_position = hand_transform.origin
+    var hand := $AniAnimationPlayer2D.get_bone_world_transform("Hand_R")
+    $Particles.global_position = hand.origin
 ```
+
+Cloth just needs bone names: any bone containing `cape`, `cloth`,
+`loincloth`, `tassel` or `scarf` (configurable) simulates; `hair`,
+`ponytail`, `braid` etc. use the hair tuning; a flyer's node can
+opt legs into the limb class. Name `Skirt Cloth Front` /
+`Skirt Cloth Back` and the panels sync as one sheet.
 
 ---
 
 ## API summary
 
-| Property | Type | Default | What it does |
-|---|---|---|---|
-| `rig` | `AniRigResource` | `null` | The imported animation data. |
-| `sprite_bindings` | `Dictionary` | `{}` | Bone uuid/name → `Texture2D`. Explicit entries win over auto-bind. |
-| `sprite_pack_folder` | `String` (dir) | `""` | Auto-bind from PNG files in this folder. Used when the source was a bare `.rig` (no embedded textures). Bundle imports leave this empty — textures auto-bind directly off `rig.sprite_textures`. |
-| `shaded` | `bool` | `false` | Render bound v1.2 parts through per-part shaded materials (v1.6 shade masks). Pre-v1.2 bones keep the plain draw path. |
-| `matcap` | `Texture2D` | `null` | Lit-metal-sphere image for the metal bucket. Unset = built-in procedural chrome. |
-| `light_direction` | `Vector3` | `(0.35, -0.55, 0.75)` | World-space light for the lit bucket (y-down; negative y = from above). |
-| `auto_play` | `bool` | `false` | Call `play()` on `_ready()`. |
-| `speed` | `float` | `1.0` | Playback speed multiplier. |
-| `loop_override` | `int` (enum) | `-1` (use rig) | Force loop on / off, or defer to the rig's `is_looping` field. |
-| `draw_bones_in_editor` | `bool` | `true` | Render debug bone lines for unbound bones. |
-| `bone_color` / `bone_width` | | | Debug bone style. |
-| `joint_color` / `joint_radius` | | | Debug joint style. |
+**Key properties**
 
-| Signal | When |
+| Property | What it does |
 |---|---|
-| `animation_finished` | Last frame reached on a non-looping clip. |
-| `animation_looped` | Wrap-around on a looping clip. |
-| `animation_event(name: String, payload: String)` | Playhead first crosses a frame that has an event in the `.rig` file (spec §8.3). One emission per event entry — multiple events on the same frame each get their own emit. Re-fires on every loop pass. `payload` is the empty string when the event has no payload. |
+| `rig` | The imported `AniRigResource`. |
+| `sprite_bindings` | Bone uuid/name → `Texture2D` overrides (auto-bind fills the rest). |
+| `auto_play` / `speed` / `loop_override` | Playback control. |
+| `zero_root_translate` | Subtract the frame-0 root offset (for games that move the body themselves). |
+| `shaded` / `matcap` / `light_direction` / `metal_tint` | Shaded-mode rendering. |
+| `cloth_*`, `hair_*`, `limb_*` | Physics keywords + stiffness/damping/inertia per material class. |
+| `draw_bones_in_editor` + colors | Debug bone rendering for unbound rigs. |
+
+**Key methods**
 
 | Method | What it does |
 |---|---|
-| `play()` | Start / resume playback. |
-| `pause()` | Pause; current frame held. |
-| `stop()` | Pause + reset to frame 0. |
-| `is_playing()` | Whether playback is active. |
-| `get_current_frame()` | Current playhead (float — sub-frame is fine). |
-| `set_current_frame(frame)` | Scrub to a specific frame. |
-| `get_bone_world_transform(uuid_or_name)` | World `Transform2D` of a bone — for game-side effect attachment. |
-| `set_light_direction(dir)` | Update the shaded-mode light (same as assigning `light_direction`). |
-| `get_part_material(uuid_or_name)` | The shaded child's `ShaderMaterial`, for per-part uniform tweaks (rim, emissive energy, metalness). Null when shaded mode is off. |
+| `play()` / `pause()` / `stop()` / `set_current_frame(f)` | Playback. |
+| `crossfade_to(rig, seconds)` | Blend into another clip from the current pose. |
+| `play_layer(rig, mask_root_name, fade)` | Drive a bone subtree from a second clip (attack-while-moving). |
+| `set_layer_hold(frame)` / `release_layer_hold()` | Park the overlay on a pose (hold-to-cast). |
+| `stop_layer(fade)` | Cancel the overlay early. |
+| `set_bone_aim(bone, angle, weight)` / `clear_bone_aim(bone)` | Steer a bone toward a direction over its animation. |
+| `get_bone_world_transform(uuid_or_name)` | Bone transform for effect/weapon attachment. |
+| `get_part_material(uuid_or_name)` | A shaded part's `ShaderMaterial` for per-part tweaks. |
+
+**Signals**: `animation_finished`, `animation_looped`,
+`animation_event(name, payload)` (fires from the base *and* layer
+playheads), `layer_finished`.
 
 ---
 
-## Limitations
+## Scope & limitations
 
-This plugin implements v1.6 of the
-[`.rig` spec](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md):
+Implements `.rig` spec v1.6. Honest gaps:
 
 | Feature | Status |
 |---|---|
-| FK keyframe interpolation (linear, easeIn/Out/InOut, stepped, custom bezier) | ✅ |
-| Shortest-arc angle interpolation | ✅ |
-| Per-frame `partSortOrder` (stepped semantics) | ✅ |
-| `frameColors` (workflow aid) | ⏭ Ignored (no playback effect, by design). |
-| `audioMarkers` (v1, deprecated) | ⏭ Ignored. Use AniManager's per-frame audio (`AnimationAudio` rows) once the spec adds it in v2. |
-| Two-bone analytic IK | ✅ Including per-frame `ikTargetX/Y` interpolation. |
-| Per-frame audio clips with trim + envelope | ❌ Not in spec v1. Pending v2. |
-| Image asset embedding | ❌ Not in spec, by design. Caller binds sprites. |
-| `min_rotation` / `max_rotation` constraints | ✅ Clamped during the FK/IK walk (spec v1.5 semantics). |
-| Shade-mask sidecars (v1.6 `<bone>.material.png` / `<bone>.normal.png`) | ✅ Shaded mode (`shaded = true`); parts without masks fall back to plain albedo. |
+| FK + IK + constraints + all interpolation types | ✅ |
+| Shade-mask sidecars (material + normal maps) | ✅ |
+| Cross-fades, body layering, bone aim, cloth/hair/limb physics | ✅ (runtime-side, no format changes) |
+| Per-frame audio clips | ❌ Spec v2 item — the authoring app composits audio into its own MP4 exports today. |
+| Keyframed mesh (FFD) deformation playback | ❌ Spec v2 item — bakes into part PNGs app-side for now. |
 
-The pose evaluator and IK solver are pure GDScript. For a typical
-animation (~10-30 bones, ~3-5 IK chains, 60 fps playback) this is
-comfortably real-time on a mid-range mobile GPU. If you hit a perf
-ceiling with much larger rigs we can revisit with a GDExtension
-(C++) port.
-
----
+The evaluator, IK solver and physics are pure GDScript — real-time
+for typical rigs (10–30 bones, several IK chains + sim bones) on
+mid-range mobile hardware. A GDExtension port is the escape hatch
+if a project needs hundreds of simulated bones.
 
 ## Troubleshooting
 
-### "Parse Error" on enable
+<details>
+<summary>Common issues (click to expand)</summary>
 
-Pull the latest from this repo — early versions had GDScript
-name-collisions with Godot 4 globals (`ease()`, `sign()`,
-`lerp_angle()`). Fixed in commit `5ebc536` and after.
+**Bones radiate from one point / parse errors on enable** — pull
+the latest; both were early-version bugs (pre-`ee7c661` /
+pre-`5ebc536`).
 
-### Bones radiate from a single point instead of forming a chain
+**`Invalid UID` warnings after updating** — toggle the plugin off
+and on, right-click the `.rig` → Reimport, save the scene. Only
+needed once when updating from installs older than `c779de3`.
 
-Pull the latest. Pre-`ee7c661` versions composed bones as
-parent-relative transforms instead of following parent end joints.
-Fixed.
+**`AniAnimationPlayer2D` missing from Create Node** — toggle the
+plugin off/on; check the Output panel for errors.
 
-### `Invalid UID` warnings after updating
+**Character mirrored/upside-down** — AniMate authors Y-down like
+Godot; a mirrored rest pose means the rig was authored assuming
+Y-up. Re-author, or `Scale (1, -1)` a parent node.
 
-Toggle the plugin off then on
-(**Project → Project Settings → Plugins**) so the custom-type
-registration rebinds. Right-click any imported `.rig` →
-**Reimport** to refresh its companion `.import` file. Save the
-scene to flush its `ext_resource` block.
+**Editor view doesn't update while scrubbing** — the editor
+redraws from `_process`; play the scene, or drive
+`set_current_frame` from a tool script.
 
-Recent versions ship stable `.uid` sidecar files so this should
-only happen once when updating from an install older than commit
-`c779de3` (the UID commit). After that one toggle + reimport,
-future re-downloads keep references intact.
-
-### `AniAnimationPlayer2D` doesn't appear in the Create Node dialog
-
-Plugin's custom-type registration didn't take. Toggle the plugin
-off and back on. If still missing, check the Output panel for
-errors — paste them in a GitHub issue.
-
-### Animation plays but the character is upside down / mirrored
-
-Likely a rest-pose authoring difference between AniManager's scene
-and Godot's. AniManager uses Y-down (positive Y is screen-bottom),
-matching Godot. If you authored a rig assuming Y-up, the rest pose
-will be mirrored. Re-author with the correct orientation, or apply
-a `Scale: (1, -1)` on the parent of the `AniAnimationPlayer2D`
-node to flip Y at runtime.
-
-### Bones in editor view don't update when I scrub the timeline
-
-Editor view updates on `queue_redraw()` which fires from
-`_process()`. If you have `auto_play` off in the inspector, the
-node won't tick — set `current_frame` from a tool script if you
-want editor scrubbing, or just play the scene to verify.
+</details>
 
 ---
 
-## Contributing
+## About this project
 
-Bug reports and pull requests welcome on
+This runtime is one half of a solo-built pipeline: characters are
+drawn and animated entirely on a tablet in AniMate, exported as
+single-file `.animrig` bundles, and dropped into Godot — where this
+plugin adds the systems that only make sense at runtime (physics
+that react to gameplay, layered attacks, aimed limbs, dynamic
+lighting). A consuming game's test harness keeps 550+ automated
+checks over the importer, evaluator, IK, cross-fade, layering and
+physics, so the format spec, the exporter, and this runtime stay
+provably in sync.
+
+Bug reports and PRs welcome via
 [GitHub issues](https://github.com/haydentaylor-devs-prog/animanager-godot/issues).
-
-For format / spec questions, open issues against the AniManager
-main repo's `docs/rig-spec.md` — the spec is authoritative and the
-plugin tracks it.
-
----
+Format questions belong on the
+[spec doc](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md).
 
 ## License
 
