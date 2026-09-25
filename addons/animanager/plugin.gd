@@ -20,9 +20,19 @@ func _enter_tree() -> void:
 		AniAnimationPlayer2D,
 		preload("res://addons/animanager/icon.svg")
 	)
+	# One-click access to the playground (2026-09-25): Project →
+	# Tools → AniMate Playground runs the scene without hunting for
+	# addons/animanager/playground/playground.tscn.
+	add_tool_menu_item("AniMate Playground", _open_playground)
+
+
+func _open_playground() -> void:
+	EditorInterface.play_custom_scene(
+		"res://addons/animanager/playground/playground.tscn")
 
 
 func _exit_tree() -> void:
 	remove_import_plugin(_importer)
 	_importer = null
 	remove_custom_type("AniAnimationPlayer2D")
+	remove_tool_menu_item("AniMate Playground")
