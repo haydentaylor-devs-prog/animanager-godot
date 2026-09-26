@@ -275,6 +275,10 @@ func _enter_character(id: String) -> void:
 	_apply_mode_buttons()
 	_refresh_presets()
 	_apply_playback()
+	# QOL (2026-09-26): a character with animations starts playing
+	# their first one immediately instead of an empty play area.
+	if not (_char().rigs as Array).is_empty():
+		_activate_rig(String(_char().rigs[0].path))
 	_rebuild_content()
 
 

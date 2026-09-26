@@ -27,6 +27,11 @@ func _enter_tree() -> void:
 
 
 func _open_playground() -> void:
+	# Also open the scene as an editor tab, so after the first Tools-
+	# menu launch the user can just press F6 (Run Current Scene) to
+	# relaunch it for the rest of the session (2026-09-26 QOL).
+	EditorInterface.open_scene_from_path(
+		"res://addons/animanager/playground/playground.tscn")
 	EditorInterface.play_custom_scene(
 		"res://addons/animanager/playground/playground.tscn")
 
