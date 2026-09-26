@@ -1184,6 +1184,18 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			var tex4: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
 			if tex4 == null:
 				return
+			# Retrigger REPLACES this event's live loop instead of
+			# stacking a second copy (looping clips re-fire the spawn
+			# event every pass while a long-lived loop - e.g. one that
+			# only stops on beam_end - is still alive).
+			var kept := []
+			for lp0 in _loops:
+				if String(lp0.get("ev", "")) == ev_name:
+					if is_instance_valid(lp0.node):
+						(lp0.node as Node).queue_free()
+				else:
+					kept.append(lp0)
+			_loops = kept
 			var lp := Sprite2D.new()
 			_crispify(lp)
 			lp.texture = tex4
@@ -1192,7 +1204,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			lp.global_position = spawn
 			lp.scale = Vector2.ONE * float(cfg.get("scale", 1))
 			add_child(lp)
-			_loops.append({"node": lp, "cfg": cfg, "t": 0.0})
+			_loops.append({"node": lp, "cfg": cfg, "t": 0.0, "ev": ev_name})
 
 
 func _beam_off() -> void:
