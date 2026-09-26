@@ -526,10 +526,15 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 		-1.0, 119.0, -1.0, func(v: float) -> void:
 			_char().playback.hold_frame = int(v)
 			_store.save_store())
-	_hold_secs_slider = _slider_into(box, "Hold for (seconds)",
-		0.2, 10.0, 1.0, func(v: float) -> void:
+	_hold_secs_slider = _int_slider_into(box, "Hold seconds (-1 = forever)",
+		-1.0, 10.0, 1.0, func(v: float) -> void:
 			_char().playback.hold_secs = v
 			_store.save_store())
+	_btn_into(box, "Release hold now", func() -> void:
+		if _hold_waiting and _ani != null:
+			_hold_waiting = false
+			_hold_cooldown = true
+			_ani.play())
 	_btn_into(box, "Flip facing", func() -> void:
 		if _ani != null:
 			_ani.scale.x = -_ani.scale.x)
@@ -1564,19 +1569,27 @@ func _process(delta: float) -> void:
 		var hold_f := int(_char().playback.get("hold_frame", -1))
 		if _hold_cooldown and int(_ani.get_current_frame()) != hold_f:
 			_hold_cooldown = false
+		elif _hold_waiting and hold_f < 0:
+			# Sliding Hold-at-frame back to -1 releases a parked hold.
+			_hold_waiting = false
+			_hold_cooldown = true
+			_ani.play()
 		elif hold_f >= 0 and not _hold_waiting and not _hold_cooldown \
 				and _ani.is_playing() \
 				and int(_ani.get_current_frame()) == hold_f:
 			_ani.pause()
 			_hold_waiting = true
-			var held := _ani
-			get_tree().create_timer(maxf(0.1,
-				float(_char().playback.get("hold_secs", 1.0)))
-			).timeout.connect(func() -> void:
-				_hold_waiting = false
-				_hold_cooldown = true
-				if is_instance_valid(held) and held == _ani:
-					held.play())
+			var secs := float(_char().playback.get("hold_secs", 1.0))
+			if secs >= 0.0:
+				var held := _ani
+				get_tree().create_timer(maxf(0.1, secs)) \
+					.timeout.connect(func() -> void:
+						_hold_waiting = false
+						_hold_cooldown = true
+						if is_instance_valid(held) and held == _ani:
+							held.play())
+			# secs < 0: hold forever - release with the button, the
+			# hold-frame slider, or by switching rigs.
 	# Cursor aim.
 	if _aim_enabled and _ani.rig != null and _aim_bone_pick != null \
 			and _aim_bone_pick.selected >= 0:
