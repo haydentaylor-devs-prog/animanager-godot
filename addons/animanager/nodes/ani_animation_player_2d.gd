@@ -289,6 +289,7 @@ func pause() -> void:
 func stop() -> void:
 	_is_playing = false
 	_current_frame = 0.0
+	_last_event_int_frame = -1
 	_clear_fade()
 	_evaluate_pose(_current_frame)
 	queue_redraw()
@@ -315,6 +316,13 @@ func set_current_frame(frame: float) -> void:
 		_current_frame = fposmod(frame, float(rig.total_frames))
 	else:
 		_current_frame = clampf(frame, 0.0, float(rig.total_frames - 1))
+	# Repositioning the playhead re-arms events from here: the tracker
+	# rewinds to just before the landed frame, so a clip (re)started
+	# at 0 fires its frame-0 events. Without this the tracker kept the
+	# PREVIOUS clip's last dispatched frame across rig switches and
+	# silently swallowed every event at or below it on the first pass
+	# (a frame-0 beam chargeup event never fired — 2026-09-26).
+	_last_event_int_frame = int(_current_frame) - 1
 	_evaluate_pose(_current_frame)
 	queue_redraw()
 

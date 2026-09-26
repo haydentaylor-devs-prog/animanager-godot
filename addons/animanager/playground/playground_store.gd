@@ -47,7 +47,10 @@ static func default_shading() -> Dictionary:
 static func default_playback() -> Dictionary:
 	# sway defaults OFF (2026-09-26): idle inspection is the common
 	# first look, and sway masks/excites physics the user didn't ask for.
-	return {"zoom": 3.0, "speed": 1.0, "sway": false}
+	return {
+		"zoom": 3.0, "speed": 1.0, "sway": false,
+		"hold_frame": -1, "hold_secs": 1.0,
+	}
 
 
 func create_character(char_name: String) -> String:

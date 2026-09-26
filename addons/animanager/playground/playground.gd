@@ -63,6 +63,10 @@ var _preset_pick: OptionButton
 var _zoom_slider: HSlider
 var _speed_slider: HSlider
 var _sway_check: CheckBox
+var _hold_frame_slider: HSlider
+var _hold_secs_slider: HSlider
+var _hold_waiting := false
+var _hold_cooldown := false
 var _preset_name_edit: LineEdit
 var _readout: Label
 
@@ -513,6 +517,18 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 	_sway_check = _toggle_into(box, "Auto-sway (excite physics)", false,
 		func(v: bool) -> void:
 			_char().playback.sway = v
+			_store.save_store())
+	# Charge-hold for PLAIN playback: park the active clip on this
+	# frame for the duration below, as if the attack key were held —
+	# lets a beam chargeup + hold be tested without setting up a
+	# layer first (the Layering submenu has its own overlay hold).
+	_hold_frame_slider = _int_slider_into(box, "Hold at frame (-1 = off)",
+		-1.0, 119.0, -1.0, func(v: float) -> void:
+			_char().playback.hold_frame = int(v)
+			_store.save_store())
+	_hold_secs_slider = _slider_into(box, "Hold for (seconds)",
+		0.2, 10.0, 1.0, func(v: float) -> void:
+			_char().playback.hold_secs = v
 			_store.save_store())
 	_btn_into(box, "Flip facing", func() -> void:
 		if _ani != null:
@@ -1029,11 +1045,11 @@ func _build_event_editor(ev_name: String) -> void:
 					cfg["length"] = val
 					_store.save_store())
 		if String(cfg.type) == "loop":
-			_slider_into(v, "Sheet columns (hframes)", 1.0, 16.0,
+			_int_slider_into(v, "Sheet columns (hframes)", 1.0, 16.0,
 				float(cfg.get("hframes", 4)), func(val: float) -> void:
 					cfg["hframes"] = int(roundf(val))
 					_store.save_store())
-			_slider_into(v, "Sheet rows (vframes)", 1.0, 8.0,
+			_int_slider_into(v, "Sheet rows (vframes)", 1.0, 8.0,
 				float(cfg.get("vframes", 1)), func(val: float) -> void:
 					cfg["vframes"] = int(roundf(val))
 					_store.save_store())
@@ -1361,6 +1377,8 @@ func _activate_rig(path: String) -> void:
 	_active_rig_path = path
 	_beam_off()
 	_loops_off()
+	_hold_waiting = false
+	_hold_cooldown = false
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
@@ -1448,6 +1466,10 @@ func _sync_playback_controls() -> void:
 		_speed_slider.value = float(pb.speed)
 	if _sway_check != null:
 		_sway_check.button_pressed = bool(pb.sway)
+	if _hold_frame_slider != null:
+		_hold_frame_slider.value = float(pb.get("hold_frame", -1))
+	if _hold_secs_slider != null:
+		_hold_secs_slider.value = float(pb.get("hold_secs", 1.0))
 
 
 func _apply_playback() -> void:
@@ -1534,6 +1556,27 @@ func _process(delta: float) -> void:
 		elif bool(_char().playback.sway) and not _attach_mode:
 			_sway_t += delta
 			_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
+	# Plain-playback charge hold: pause on the stored hold frame, then
+	# resume after hold_secs. The cooldown keeps the resume from
+	# re-parking until the playhead has left the hold frame (looping
+	# clips re-arm on the next pass).
+	if _screen == Screen.SANDBOX and not _char_id.is_empty():
+		var hold_f := int(_char().playback.get("hold_frame", -1))
+		if _hold_cooldown and int(_ani.get_current_frame()) != hold_f:
+			_hold_cooldown = false
+		elif hold_f >= 0 and not _hold_waiting and not _hold_cooldown \
+				and _ani.is_playing() \
+				and int(_ani.get_current_frame()) == hold_f:
+			_ani.pause()
+			_hold_waiting = true
+			var held := _ani
+			get_tree().create_timer(maxf(0.1,
+				float(_char().playback.get("hold_secs", 1.0)))
+			).timeout.connect(func() -> void:
+				_hold_waiting = false
+				_hold_cooldown = true
+				if is_instance_valid(held) and held == _ani:
+					held.play())
 	# Cursor aim.
 	if _aim_enabled and _ani.rig != null and _aim_bone_pick != null \
 			and _aim_bone_pick.selected >= 0:
@@ -1625,6 +1668,32 @@ func _slider_into(
 		on_change.call(v)
 	s.value_changed.connect(update)
 	l.text = "%s: %.2f" % [label_text, value]
+	row.add_child(s)
+	parent.add_child(row)
+	return s
+
+
+## Whole-number slider (frame counts, sheet grids): step 1, %d label.
+func _int_slider_into(
+	parent: Container, label_text: String, mn: float, mx: float,
+	value: float, on_change: Callable
+) -> HSlider:
+	var row := VBoxContainer.new()
+	var l := Label.new()
+	l.add_theme_font_size_override("font_size", FONT)
+	row.add_child(l)
+	var s := HSlider.new()
+	s.min_value = mn
+	s.max_value = mx
+	s.step = 1.0
+	s.rounded = true
+	s.value = value
+	s.custom_minimum_size = Vector2(PANEL_W - 60, 0)
+	var update := func(v: float) -> void:
+		l.text = "%s: %d" % [label_text, int(v)]
+		on_change.call(v)
+	s.value_changed.connect(update)
+	l.text = "%s: %d" % [label_text, int(value)]
 	row.add_child(s)
 	parent.add_child(row)
 	return s
