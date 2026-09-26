@@ -972,6 +972,22 @@ func _event_cfg(ev_name: String) -> Dictionary:
 	return events[ev_name]
 
 
+## Recursive assets/vfx listing as VFX_DIR-relative paths, so art
+## can be organized in per-character subfolders (2026-09-26).
+func _vfx_files(rel: String = "") -> Array:
+	var out := []
+	var path := VFX_DIR if rel.is_empty() else VFX_DIR + "/" + rel
+	var dir := DirAccess.open(path)
+	if dir == null:
+		return out
+	for f in dir.get_files():
+		if f.get_extension().to_lower() == "png":
+			out.append(f if rel.is_empty() else rel + "/" + f)
+	for d in dir.get_directories():
+		out.append_array(_vfx_files(d if rel.is_empty() else rel + "/" + d))
+	return out
+
+
 func _build_event_editor(ev_name: String) -> void:
 	var cfg := _event_cfg(ev_name)
 	var box := PanelContainer.new()
@@ -993,15 +1009,10 @@ func _build_event_editor(ev_name: String) -> void:
 
 	if String(cfg.type) != "beam_off" and String(cfg.type) != "none":
 		var file_pick := OptionButton.new()
-		var dir := DirAccess.open(VFX_DIR)
-		if dir == null:
-			file_pick.add_item("(no assets/vfx folder)")
-		else:
-			for f in dir.get_files():
-				if f.get_extension().to_lower() == "png":
-					file_pick.add_item(f)
-			if file_pick.item_count == 0:
-				file_pick.add_item("(drop PNGs in assets/vfx)")
+		for f in _vfx_files():
+			file_pick.add_item(String(f))
+		if file_pick.item_count == 0:
+			file_pick.add_item("(drop PNGs in assets/vfx)")
 		var file_matched := false
 		for i in range(file_pick.item_count):
 			if file_pick.get_item_text(i) == String(cfg.file):
