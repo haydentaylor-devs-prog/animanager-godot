@@ -1690,6 +1690,10 @@ func _slider_into(
 	s.min_value = mn
 	s.max_value = mx
 	s.step = 0.01
+	# Mouse wheel must SCROLL the settings panel, not tweak whatever
+	# slider the cursor happens to cross (an hframes slider silently
+	# knocked from 12 to 11 that way - 2026-09-26).
+	s.scrollable = false
 	s.value = value
 	s.custom_minimum_size = Vector2(PANEL_W - 60, 0)
 	var update := func(v: float) -> void:
@@ -1716,6 +1720,7 @@ func _int_slider_into(
 	s.max_value = mx
 	s.step = 1.0
 	s.rounded = true
+	s.scrollable = false
 	s.value = value
 	s.custom_minimum_size = Vector2(PANEL_W - 60, 0)
 	var update := func(v: float) -> void:
