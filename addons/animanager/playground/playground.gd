@@ -91,6 +91,10 @@ var _events_expanded := ""  # event name whose editor is open
 var _projectiles: Array = []  # [{node, vel, ttl}]
 var _beam: Sprite2D
 var _beam_cfg: Dictionary = {}
+# Anchored spritesheet loops (charge-up effects): follow a bone +
+# bone-local offset every frame, flip through sheet frames, die when
+# their configured stop event fires.
+var _loops: Array = []  # [{node, cfg, t}]
 
 
 func _ready() -> void:
@@ -234,6 +238,7 @@ func _show_menu() -> void:
 		_ani = null
 		_weapon = null
 	_beam_off()
+	_loops_off()
 	for pr in _projectiles:
 		if is_instance_valid(pr.node):
 			(pr.node as Node).queue_free()
@@ -931,7 +936,7 @@ func _build_event_editor(ev_name: String) -> void:
 	_content.add_child(box)
 
 	var type_pick := OptionButton.new()
-	for t in ["projectile", "burst", "beam_on", "beam_off", "none"]:
+	for t in ["projectile", "burst", "beam_on", "beam_off", "loop", "none"]:
 		type_pick.add_item(t)
 	for i in range(type_pick.item_count):
 		if type_pick.get_item_text(i) == String(cfg.type):
@@ -975,6 +980,17 @@ func _build_event_editor(ev_name: String) -> void:
 			func(val: float) -> void:
 				cfg["scale"] = val
 				_store.save_store())
+		# Bone-local anchor offset: rides the bone's rotation, so an
+		# offset reaching the staff TIP stays on the tip through the
+		# charge swing and through movement (2026-09-26).
+		_slider_into(v, "Anchor offset X (bone-local px)", -120.0, 120.0,
+			float(cfg.get("ox", 0.0)), func(val: float) -> void:
+				cfg["ox"] = val
+				_store.save_store())
+		_slider_into(v, "Anchor offset Y (bone-local px)", -120.0, 120.0,
+			float(cfg.get("oy", 0.0)), func(val: float) -> void:
+				cfg["oy"] = val
+				_store.save_store())
 		if String(cfg.type) == "projectile":
 			_slider_into(v, "Speed (px/s)", 50.0, 2000.0, float(cfg.speed),
 				func(val: float) -> void:
@@ -989,6 +1005,31 @@ func _build_event_editor(ev_name: String) -> void:
 				float(cfg.get("length", 260.0)), func(val: float) -> void:
 					cfg["length"] = val
 					_store.save_store())
+		if String(cfg.type) == "loop":
+			_slider_into(v, "Sheet columns (hframes)", 1.0, 16.0,
+				float(cfg.get("hframes", 4)), func(val: float) -> void:
+					cfg["hframes"] = int(roundf(val))
+					_store.save_store())
+			_slider_into(v, "Sheet rows (vframes)", 1.0, 8.0,
+				float(cfg.get("vframes", 1)), func(val: float) -> void:
+					cfg["vframes"] = int(roundf(val))
+					_store.save_store())
+			_slider_into(v, "Flipbook FPS", 2.0, 30.0,
+				float(cfg.get("fps", 10.0)), func(val: float) -> void:
+					cfg["fps"] = val
+					_store.save_store())
+			var stop_pick := OptionButton.new()
+			stop_pick.add_item("(no stop event)")
+			for other in _discover_event_names():
+				if String(other) != ev_name:
+					stop_pick.add_item(String(other))
+			for i in range(stop_pick.item_count):
+				if stop_pick.get_item_text(i) == String(cfg.get("stop_on", "")):
+					stop_pick.select(i)
+			stop_pick.item_selected.connect(func(i: int) -> void:
+				cfg["stop_on"] = "" if i == 0 else stop_pick.get_item_text(i)
+				_store.save_store())
+			v.add_child(stop_pick)
 
 
 func _fx_direction(spawn_global: Vector2) -> Vector2:
@@ -999,16 +1040,31 @@ func _fx_direction(spawn_global: Vector2) -> Vector2:
 	return Vector2(signf(_ani.scale.x if _ani.scale.x != 0 else 1.0), 0)
 
 
+func _bone_anchor_global(cfg: Dictionary) -> Vector2:
+	var bone := String(cfg.get("bone", ""))
+	if bone.is_empty():
+		return _ani.global_position
+	var t := _ani.get_bone_world_transform(bone)
+	return _ani.to_global(
+		t * Vector2(float(cfg.get("ox", 0.0)), float(cfg.get("oy", 0.0))))
+
+
 func _on_frame_event(ev_name: String, _payload: String) -> void:
 	if _ani == null or _char_id.is_empty():
 		return
+	# Any event may be some loop's stop event.
+	var still := []
+	for lp in _loops:
+		if String((lp.cfg as Dictionary).get("stop_on", "")) == ev_name:
+			if is_instance_valid(lp.node):
+				(lp.node as Node).queue_free()
+		else:
+			still.append(lp)
+	_loops = still
 	var cfg: Variant = _char().get("events", {}).get(ev_name)
 	if not cfg is Dictionary:
 		return
-	var bone := String(cfg.get("bone", ""))
-	var spawn := _ani.global_position
-	if not bone.is_empty():
-		spawn = _ani.to_global(_ani.get_bone_world_transform(bone).origin)
+	var spawn := _bone_anchor_global(cfg)
 	match String(cfg.type):
 		"projectile":
 			var tex: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
@@ -1053,6 +1109,18 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			_beam_cfg = cfg
 		"beam_off":
 			_beam_off()
+		"loop":
+			var tex4: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
+			if tex4 == null:
+				return
+			var lp := Sprite2D.new()
+			lp.texture = tex4
+			lp.hframes = maxi(1, int(cfg.get("hframes", 4)))
+			lp.vframes = maxi(1, int(cfg.get("vframes", 1)))
+			lp.global_position = spawn
+			lp.scale = Vector2.ONE * float(cfg.get("scale", 1))
+			add_child(lp)
+			_loops.append({"node": lp, "cfg": cfg, "t": 0.0})
 
 
 func _beam_off() -> void:
@@ -1060,6 +1128,13 @@ func _beam_off() -> void:
 		_beam.queue_free()
 		_beam = null
 	_beam_cfg = {}
+
+
+func _loops_off() -> void:
+	for lp in _loops:
+		if is_instance_valid(lp.node):
+			(lp.node as Node).queue_free()
+	_loops = []
 
 
 func _update_effects(delta: float) -> void:
@@ -1073,11 +1148,24 @@ func _update_effects(delta: float) -> void:
 		(pr.node as Sprite2D).global_position += (pr.vel as Vector2) * delta
 		alive.append(pr)
 	_projectiles = alive
+	# Anchored loops: follow their bone anchor + flip through frames.
+	var live_loops := []
+	for lp in _loops:
+		if not is_instance_valid(lp.node) or _ani == null:
+			continue
+		lp.t += delta
+		var lcfg: Dictionary = lp.cfg
+		var node := lp.node as Sprite2D
+		var lt := _ani.get_bone_world_transform(String(lcfg.get("bone", "")))
+		node.global_position = _bone_anchor_global(lcfg)
+		node.rotation = lt.get_rotation() + _ani.rotation
+		var total := maxi(1, int(lcfg.get("hframes", 4))) \
+			* maxi(1, int(lcfg.get("vframes", 1)))
+		node.frame = int(lp.t * float(lcfg.get("fps", 10.0))) % total
+		live_loops.append(lp)
+	_loops = live_loops
 	if _beam != null and _ani != null and not _beam_cfg.is_empty():
-		var bone := String(_beam_cfg.get("bone", ""))
-		var spawn := _ani.global_position
-		if not bone.is_empty():
-			spawn = _ani.to_global(_ani.get_bone_world_transform(bone).origin)
+		var spawn := _bone_anchor_global(_beam_cfg)
 		var dir := _fx_direction(spawn)
 		_beam.global_position = spawn
 		_beam.rotation = dir.angle()
@@ -1236,6 +1324,8 @@ func _activate_rig(path: String) -> void:
 	if res == null or _ani == null:
 		return
 	_active_rig_path = path
+	_beam_off()
+	_loops_off()
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
