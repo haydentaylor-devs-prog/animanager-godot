@@ -94,6 +94,11 @@ var _beam_cfg: Dictionary = {}
 
 
 func _ready() -> void:
+	# Run our _process AFTER the animation node's: the weapon (and
+	# beam) follow bone transforms, and reading them before the
+	# frame's pose evaluation left them one frame behind - a visible
+	# pixel jitter against slow motion like an idle bob (2026-09-26).
+	process_priority = 100
 	get_window().title = "AniMate Playground"
 	get_tree().set_auto_accept_quit(false)
 	randomize()
