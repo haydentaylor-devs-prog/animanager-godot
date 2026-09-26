@@ -31,6 +31,12 @@ const DRAG_SPEED_PER_PX := 3.0
 const DRAG_MAX_DEFLECT := 100.0
 const WEAPONS_DIR := "res://assets/weapons"
 const VFX_DIR := "res://assets/vfx"
+# Texel-AA shader for the weapon + effect sprites: they render at
+# arbitrary fitted/slider scales (non-integer effective magnification)
+# where plain nearest shimmers during slow sub-pixel motion — the
+# "weapon jitters while the body is still" report (2026-09-26).
+const CRISP_SHADER := preload(
+	"res://addons/animanager/shaders/ani_crisp_sprite.gdshader")
 
 var _store: Store
 var _char_id := ""
@@ -54,6 +60,9 @@ var _name_label: Label
 var _sandbox_btn: Button
 var _ingame_btn: Button
 var _preset_pick: OptionButton
+var _zoom_slider: HSlider
+var _speed_slider: HSlider
+var _sway_check: CheckBox
 var _preset_name_edit: LineEdit
 var _readout: Label
 
@@ -289,6 +298,7 @@ func _enter_character(id: String) -> void:
 	_apply_mode_buttons()
 	_refresh_presets()
 	_apply_playback()
+	_sync_playback_controls()
 	# QOL (2026-09-26): a character with animations starts playing
 	# their first one immediately instead of an empty play area.
 	if not (_char().rigs as Array).is_empty():
@@ -336,10 +346,11 @@ func _build_workspace() -> void:
 	modes.add_child(_ingame_btn)
 	v.add_child(modes)
 
-	_slider_into(v, "Zoom", 0.5, 10.0, 3.0, func(val: float) -> void:
-		_char().playback.zoom = val
-		_apply_playback()
-		_store.save_store())
+	_zoom_slider = _slider_into(v, "Zoom", 0.5, 10.0, 3.0,
+		func(val: float) -> void:
+			_char().playback.zoom = val
+			_apply_playback()
+			_store.save_store())
 
 	_build_presets_section(v)
 	_build_playback_section(v)
@@ -469,6 +480,7 @@ func _build_presets_section(parent: VBoxContainer) -> void:
 		_char().current_preset = n
 		_store.save_store()
 		_apply_playback()
+		_sync_playback_controls()
 		if not _active_rig_path.is_empty():
 			_activate_rig(_active_rig_path)
 		_rebuild_content())
@@ -493,13 +505,15 @@ func _refresh_presets() -> void:
 
 func _build_playback_section(parent: VBoxContainer) -> void:
 	var box := _collapsible(parent, "Playback", true)
-	_slider_into(box, "Speed", 0.1, 3.0, 1.0, func(v: float) -> void:
-		_char().playback.speed = v
-		_apply_playback()
-		_store.save_store())
-	_toggle_into(box, "Auto-sway (excite physics)", true, func(v: bool) -> void:
-		_char().playback.sway = v
-		_store.save_store())
+	_speed_slider = _slider_into(box, "Speed", 0.1, 3.0, 1.0,
+		func(v: float) -> void:
+			_char().playback.speed = v
+			_apply_playback()
+			_store.save_store())
+	_sway_check = _toggle_into(box, "Auto-sway (excite physics)", false,
+		func(v: bool) -> void:
+			_char().playback.sway = v
+			_store.save_store())
 	_btn_into(box, "Flip facing", func() -> void:
 		if _ani != null:
 			_ani.scale.x = -_ani.scale.x)
@@ -1049,6 +1063,14 @@ func _fx_direction(spawn_global: Vector2) -> Vector2:
 	return Vector2(signf(_ani.scale.x if _ani.scale.x != 0 else 1.0), 0)
 
 
+func _crispify(s: Sprite2D) -> void:
+	# The AA seam blend needs bilinear samples; the shader re-sharpens.
+	s.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	var m := ShaderMaterial.new()
+	m.shader = CRISP_SHADER
+	s.material = m
+
+
 func _bone_anchor_global(cfg: Dictionary) -> Vector2:
 	var bone := String(cfg.get("bone", ""))
 	if bone.is_empty():
@@ -1080,6 +1102,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			if tex == null:
 				return
 			var sp := Sprite2D.new()
+			_crispify(sp)
 			sp.texture = tex
 			sp.global_position = spawn
 			var dir := _fx_direction(spawn)
@@ -1095,6 +1118,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			if tex2 == null:
 				return
 			var b := Sprite2D.new()
+			_crispify(b)
 			b.texture = tex2
 			b.global_position = spawn
 			b.scale = Vector2.ONE * float(cfg.get("scale", 1)) * 0.5
@@ -1111,6 +1135,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			if tex3 == null:
 				return
 			_beam = Sprite2D.new()
+			_crispify(_beam)
 			_beam.texture = tex3
 			_beam.centered = false
 			_beam.offset = Vector2(0, -tex3.get_height() * 0.5)
@@ -1123,6 +1148,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			if tex4 == null:
 				return
 			var lp := Sprite2D.new()
+			_crispify(lp)
 			lp.texture = tex4
 			lp.hframes = maxi(1, int(cfg.get("hframes", 4)))
 			lp.vframes = maxi(1, int(cfg.get("vframes", 1)))
@@ -1397,6 +1423,7 @@ func _apply_weapon(w: Dictionary) -> void:
 		return
 	if _weapon == null:
 		_weapon = Sprite2D.new()
+		_crispify(_weapon)
 		_ani.add_child(_weapon)
 	_weapon.texture = tex
 	_apply_weapon_layer()
@@ -1409,6 +1436,18 @@ func _apply_weapon_layer() -> void:
 	_weapon.z_as_relative = true
 	_weapon.z_index = -100 if bool(w.get("behind", false)) else 100
 	_weapon.show_behind_parent = bool(w.get("behind", false))
+
+
+## Push the stored playback values into the (once-built, reused)
+## header controls so what they display is what _process reads.
+func _sync_playback_controls() -> void:
+	var pb: Dictionary = _char().playback
+	if _zoom_slider != null:
+		_zoom_slider.value = float(pb.zoom)
+	if _speed_slider != null:
+		_speed_slider.value = float(pb.speed)
+	if _sway_check != null:
+		_sway_check.button_pressed = bool(pb.sway)
 
 
 func _apply_playback() -> void:
@@ -1570,7 +1609,7 @@ func _collapsible(parent: VBoxContainer, text: String, collapsed: bool) -> VBoxC
 func _slider_into(
 	parent: Container, label_text: String, mn: float, mx: float,
 	value: float, on_change: Callable
-) -> void:
+) -> HSlider:
 	var row := VBoxContainer.new()
 	var l := Label.new()
 	l.add_theme_font_size_override("font_size", FONT)
@@ -1588,17 +1627,19 @@ func _slider_into(
 	l.text = "%s: %.2f" % [label_text, value]
 	row.add_child(s)
 	parent.add_child(row)
+	return s
 
 
 func _toggle_into(
 	parent: Container, text: String, initial: bool, on_change: Callable
-) -> void:
+) -> CheckBox:
 	var c := CheckBox.new()
 	c.text = text
 	c.add_theme_font_size_override("font_size", FONT)
 	c.button_pressed = initial
 	c.toggled.connect(on_change)
 	parent.add_child(c)
+	return c
 
 
 func _btn_into(parent: Container, text: String, on_press: Callable) -> void:
