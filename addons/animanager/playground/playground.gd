@@ -1074,7 +1074,7 @@ func _build_event_editor(ev_name: String) -> void:
 				float(cfg.get("vframes", 1)), func(val: float) -> void:
 					cfg["vframes"] = int(roundf(val))
 					_store.save_store())
-			_slider_into(v, "Flipbook FPS", 2.0, 30.0,
+			_int_slider_into(v, "Flipbook FPS", 2.0, 30.0,
 				float(cfg.get("fps", 10.0)), func(val: float) -> void:
 					cfg["fps"] = val
 					_store.save_store())
