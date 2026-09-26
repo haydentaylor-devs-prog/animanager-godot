@@ -1002,9 +1002,20 @@ func _build_event_editor(ev_name: String) -> void:
 					file_pick.add_item(f)
 			if file_pick.item_count == 0:
 				file_pick.add_item("(drop PNGs in assets/vfx)")
+		var file_matched := false
 		for i in range(file_pick.item_count):
 			if file_pick.get_item_text(i) == String(cfg.file):
 				file_pick.select(i)
+				file_matched = true
+		# An OptionButton DISPLAYS its selection even when the user
+		# never tapped it - the store must match what the panel shows,
+		# or a binding silently keeps file "" while looking configured
+		# (the chargeup loop that never spawned, 2026-09-26).
+		if not file_matched and file_pick.selected >= 0 \
+				and not file_pick.get_item_text(file_pick.selected) \
+					.begins_with("("):
+			cfg.file = file_pick.get_item_text(file_pick.selected)
+			_store.save_store()
 		file_pick.item_selected.connect(func(i: int) -> void:
 			cfg.file = file_pick.get_item_text(i)
 			_store.save_store())
@@ -1012,9 +1023,14 @@ func _build_event_editor(ev_name: String) -> void:
 
 		var bone_pick := OptionButton.new()
 		_fill_bone_pick(bone_pick, "hand")
+		var bone_matched := false
 		for i in range(bone_pick.item_count):
 			if bone_pick.get_item_text(i) == String(cfg.bone):
 				bone_pick.select(i)
+				bone_matched = true
+		if not bone_matched and bone_pick.selected >= 0:
+			cfg.bone = bone_pick.get_item_text(bone_pick.selected)
+			_store.save_store()
 		bone_pick.item_selected.connect(func(i: int) -> void:
 			cfg.bone = bone_pick.get_item_text(i)
 			_store.save_store())
