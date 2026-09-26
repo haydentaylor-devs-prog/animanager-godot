@@ -64,6 +64,7 @@ func create_character(char_name: String) -> String:
 		"presets": {},
 		"current_preset": "Default",
 		"ingame": {"idle": "", "binds": {}},
+		"events": {},
 	}
 	# Every character starts with a Default preset (the spec).
 	var c: Dictionary = data.characters[id]
@@ -85,6 +86,7 @@ func snapshot(id: String) -> Dictionary:
 		"rigs": (c.rigs as Array).duplicate(true),
 		"layers": (c.layers as Array).duplicate(true),
 		"ingame": (c.ingame as Dictionary).duplicate(true),
+		"events": (c.get("events", {}) as Dictionary).duplicate(true),
 	}
 
 
@@ -97,6 +99,7 @@ func apply_snapshot(id: String, snap: Dictionary) -> void:
 	c.rigs = (snap.get("rigs", c.rigs) as Array).duplicate(true)
 	c.layers = (snap.get("layers", c.layers) as Array).duplicate(true)
 	c.ingame = (snap.get("ingame", c.ingame) as Dictionary).duplicate(true)
+	c.events = (snap.get("events", c.get("events", {})) as Dictionary).duplicate(true)
 	save_store()
 
 

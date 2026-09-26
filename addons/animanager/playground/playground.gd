@@ -30,6 +30,7 @@ const FONT_HEAD := 17
 const DRAG_SPEED_PER_PX := 3.0
 const DRAG_MAX_DEFLECT := 100.0
 const WEAPONS_DIR := "res://assets/weapons"
+const VFX_DIR := "res://assets/vfx"
 
 var _store: Store
 var _char_id := ""
@@ -80,6 +81,15 @@ var _captured_key := ""
 var _held_bind_key := ""
 
 var _dialog_layer: CanvasLayer
+
+# Events & Effects (2026-09-26): per-character bindings from frame-
+# event NAMES (auto-discovered from the character's rigs) to visual
+# effects, previewed live in both modes. Types: projectile / burst /
+# beam_on / beam_off.
+var _events_expanded := ""  # event name whose editor is open
+var _projectiles: Array = []  # [{node, vel, ttl}]
+var _beam: Sprite2D
+var _beam_cfg: Dictionary = {}
 
 
 func _ready() -> void:
@@ -217,6 +227,11 @@ func _show_menu() -> void:
 		_ani.queue_free()
 		_ani = null
 		_weapon = null
+	_beam_off()
+	for pr in _projectiles:
+		if is_instance_valid(pr.node):
+			(pr.node as Node).queue_free()
+	_projectiles = []
 	if _joy != null:
 		_joy.visible = false
 	_refresh_char_list()
@@ -233,6 +248,7 @@ func _enter_character(id: String) -> void:
 	_ani = AniAnimationPlayer2D.new()
 	_ani.zero_root_translate = true
 	add_child(_ani)
+	_ani.animation_event.connect(_on_frame_event)
 	_recenter()
 
 	if _work_root == null:
@@ -481,6 +497,7 @@ func _build_sandbox_home() -> void:
 	_btn_into(_content, "Shading Options", func() -> void: _show_submenu("shading"))
 	_btn_into(_content, "Weapon Menu", func() -> void: _show_submenu("weapon"))
 	_btn_into(_content, "Animation Layering", func() -> void: _show_submenu("layering"))
+	_btn_into(_content, "Events & Effects", func() -> void: _show_submenu("events"))
 	var sep := HSeparator.new()
 	_content.add_child(sep)
 	var head := Label.new()
@@ -619,13 +636,15 @@ func _show_submenu(which: String) -> void:
 		_rebuild_content())
 	var title := Label.new()
 	title.text = {"physics": "Physics Options", "shading": "Shading Options",
-		"weapon": "Weapon Menu", "layering": "Animation Layering"}[which]
+		"weapon": "Weapon Menu", "layering": "Animation Layering",
+		"events": "Events & Effects"}[which]
 	title.add_theme_font_size_override("font_size", FONT_HEAD)
 	title.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
 	_content.add_child(title)
 	var scope := Label.new()
 	var r := _store.rig_entry(_char_id, _active_rig_path)
-	var unique: bool = not r.is_empty() and which != "layering" \
+	var unique: bool = not r.is_empty() \
+		and which != "layering" and which != "events" \
 		and r.ovr.get(which) is Dictionary
 	scope.text = ("Editing: UNIQUE to %s" % String(r.get("name", "?"))) if unique \
 		else "Editing: shared (all animations)"
@@ -641,6 +660,8 @@ func _show_submenu(which: String) -> void:
 			_build_weapon_menu()
 		"layering":
 			_build_layering_menu()
+		"events":
+			_build_events_menu()
 
 
 func _domain_target(domain: String) -> Dictionary:
@@ -810,6 +831,239 @@ func _play_layer_test(record: bool) -> void:
 		_ani.set_layer_hold(_layer_hold)
 	if record:
 		_store.add_layer(_char_id, _active_rig_path, _layer_overlay_path, mask)
+
+
+# ── Events & Effects ───────────────────────────────────────────────
+
+## Every event name in the character's rigs, plus any already bound.
+func _discover_event_names() -> Array:
+	var names := {}
+	for r in _char().rigs:
+		var res := _load_rig_res(String(r.path))
+		if res == null:
+			continue
+		for ev in res.events:
+			var n := String(ev.get("name", ""))
+			if not n.is_empty():
+				names[n] = true
+	for n in _char().get("events", {}):
+		names[n] = true
+	var out := names.keys()
+	out.sort()
+	return out
+
+
+func _build_events_menu() -> void:
+	var names := _discover_event_names()
+	if names.is_empty():
+		var hint := Label.new()
+		hint.text = ("No frame events found in this character's animations.\n"
+			+ "Add events in AniMate's timeline (Events button on the\n"
+			+ "frame bar), re-export the .animrig, and they appear here\n"
+			+ "automatically - ready to bind to projectiles, bursts and\n"
+			+ "beams.")
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_font_size_override("font_size", 12)
+		hint.modulate = Color(0.7, 0.7, 0.7)
+		_content.add_child(hint)
+		return
+	var intro := Label.new()
+	intro.text = "Events found in this character's animations.\nTap one to bind an effect:"
+	intro.add_theme_font_size_override("font_size", 12)
+	intro.modulate = Color(0.7, 0.7, 0.7)
+	_content.add_child(intro)
+	var bindings: Dictionary = _char().get("events", {})
+	for n in names:
+		var ev_name: String = n
+		var cfg: Variant = bindings.get(ev_name)
+		var b := Button.new()
+		var summary := "unbound" if not cfg is Dictionary \
+			else String(cfg.get("type", "?")) + " · " + String(cfg.get("file", ""))
+		b.text = "%s  —  %s" % [ev_name, summary]
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.add_theme_font_size_override("font_size", FONT)
+		b.modulate = Color(0.5, 0.9, 0.5) if cfg is Dictionary else Color.WHITE
+		b.pressed.connect(func() -> void:
+			_events_expanded = "" if _events_expanded == ev_name else ev_name
+			_show_submenu("events"))
+		_content.add_child(b)
+		if _events_expanded == ev_name:
+			_build_event_editor(ev_name)
+
+
+func _event_cfg(ev_name: String) -> Dictionary:
+	var events: Dictionary = _char().get("events", {})
+	if not events.get(ev_name) is Dictionary:
+		events[ev_name] = {
+			"type": "projectile", "file": "", "bone": "",
+			"speed": 700.0, "life": 1.2, "scale": 1.0, "length": 260.0,
+		}
+		_char().events = events
+	return events[ev_name]
+
+
+func _build_event_editor(ev_name: String) -> void:
+	var cfg := _event_cfg(ev_name)
+	var box := PanelContainer.new()
+	var v := VBoxContainer.new()
+	box.add_child(v)
+	_content.add_child(box)
+
+	var type_pick := OptionButton.new()
+	for t in ["projectile", "burst", "beam_on", "beam_off", "none"]:
+		type_pick.add_item(t)
+	for i in range(type_pick.item_count):
+		if type_pick.get_item_text(i) == String(cfg.type):
+			type_pick.select(i)
+	type_pick.item_selected.connect(func(i: int) -> void:
+		cfg.type = type_pick.get_item_text(i)
+		_store.save_store()
+		_show_submenu("events"))
+	v.add_child(type_pick)
+
+	if String(cfg.type) != "beam_off" and String(cfg.type) != "none":
+		var file_pick := OptionButton.new()
+		var dir := DirAccess.open(VFX_DIR)
+		if dir == null:
+			file_pick.add_item("(no assets/vfx folder)")
+		else:
+			for f in dir.get_files():
+				if f.get_extension().to_lower() == "png":
+					file_pick.add_item(f)
+			if file_pick.item_count == 0:
+				file_pick.add_item("(drop PNGs in assets/vfx)")
+		for i in range(file_pick.item_count):
+			if file_pick.get_item_text(i) == String(cfg.file):
+				file_pick.select(i)
+		file_pick.item_selected.connect(func(i: int) -> void:
+			cfg.file = file_pick.get_item_text(i)
+			_store.save_store())
+		v.add_child(file_pick)
+
+		var bone_pick := OptionButton.new()
+		_fill_bone_pick(bone_pick, "hand")
+		for i in range(bone_pick.item_count):
+			if bone_pick.get_item_text(i) == String(cfg.bone):
+				bone_pick.select(i)
+		bone_pick.item_selected.connect(func(i: int) -> void:
+			cfg.bone = bone_pick.get_item_text(i)
+			_store.save_store())
+		v.add_child(bone_pick)
+
+		_slider_into(v, "Effect scale", 0.1, 6.0, float(cfg.get("scale", 1.0)),
+			func(val: float) -> void:
+				cfg["scale"] = val
+				_store.save_store())
+		if String(cfg.type) == "projectile":
+			_slider_into(v, "Speed (px/s)", 50.0, 2000.0, float(cfg.speed),
+				func(val: float) -> void:
+					cfg.speed = val
+					_store.save_store())
+			_slider_into(v, "Lifetime (s)", 0.2, 4.0, float(cfg.life),
+				func(val: float) -> void:
+					cfg.life = val
+					_store.save_store())
+		if String(cfg.type) == "beam_on":
+			_slider_into(v, "Beam length (px)", 60.0, 1200.0,
+				float(cfg.get("length", 260.0)), func(val: float) -> void:
+					cfg["length"] = val
+					_store.save_store())
+
+
+func _fx_direction(spawn_global: Vector2) -> Vector2:
+	if _aim_enabled:
+		var d := get_global_mouse_position() - spawn_global
+		if d.length() > 1.0:
+			return d.normalized()
+	return Vector2(signf(_ani.scale.x if _ani.scale.x != 0 else 1.0), 0)
+
+
+func _on_frame_event(ev_name: String, _payload: String) -> void:
+	if _ani == null or _char_id.is_empty():
+		return
+	var cfg: Variant = _char().get("events", {}).get(ev_name)
+	if not cfg is Dictionary:
+		return
+	var bone := String(cfg.get("bone", ""))
+	var spawn := _ani.global_position
+	if not bone.is_empty():
+		spawn = _ani.to_global(_ani.get_bone_world_transform(bone).origin)
+	match String(cfg.type):
+		"projectile":
+			var tex: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
+			if tex == null:
+				return
+			var sp := Sprite2D.new()
+			sp.texture = tex
+			sp.global_position = spawn
+			var dir := _fx_direction(spawn)
+			sp.rotation = dir.angle()
+			sp.scale = Vector2(float(cfg.get("scale", 1)), float(cfg.get("scale", 1)))
+			add_child(sp)
+			_projectiles.append({
+				"node": sp, "vel": dir * float(cfg.speed),
+				"ttl": float(cfg.life),
+			})
+		"burst":
+			var tex2: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
+			if tex2 == null:
+				return
+			var b := Sprite2D.new()
+			b.texture = tex2
+			b.global_position = spawn
+			b.scale = Vector2.ONE * float(cfg.get("scale", 1)) * 0.5
+			add_child(b)
+			var tw := create_tween()
+			tw.set_parallel(true)
+			tw.tween_property(b, "scale",
+				Vector2.ONE * float(cfg.get("scale", 1)) * 1.6, 0.3)
+			tw.tween_property(b, "modulate:a", 0.0, 0.3)
+			tw.chain().tween_callback(b.queue_free)
+		"beam_on":
+			_beam_off()
+			var tex3: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
+			if tex3 == null:
+				return
+			_beam = Sprite2D.new()
+			_beam.texture = tex3
+			_beam.centered = false
+			_beam.offset = Vector2(0, -tex3.get_height() * 0.5)
+			add_child(_beam)
+			_beam_cfg = cfg
+		"beam_off":
+			_beam_off()
+
+
+func _beam_off() -> void:
+	if _beam != null:
+		_beam.queue_free()
+		_beam = null
+	_beam_cfg = {}
+
+
+func _update_effects(delta: float) -> void:
+	var alive := []
+	for pr in _projectiles:
+		pr.ttl -= delta
+		if pr.ttl <= 0.0 or not is_instance_valid(pr.node):
+			if is_instance_valid(pr.node):
+				(pr.node as Node).queue_free()
+			continue
+		(pr.node as Sprite2D).global_position += (pr.vel as Vector2) * delta
+		alive.append(pr)
+	_projectiles = alive
+	if _beam != null and _ani != null and not _beam_cfg.is_empty():
+		var bone := String(_beam_cfg.get("bone", ""))
+		var spawn := _ani.global_position
+		if not bone.is_empty():
+			spawn = _ani.to_global(_ani.get_bone_world_transform(bone).origin)
+		var dir := _fx_direction(spawn)
+		_beam.global_position = spawn
+		_beam.rotation = dir.angle()
+		var tex_w := float(_beam.texture.get_width())
+		_beam.scale = Vector2(
+			float(_beam_cfg.get("length", 260.0)) / maxf(tex_w, 1.0),
+			float(_beam_cfg.get("scale", 1.0)))
 
 
 # ── In-Game mode ───────────────────────────────────────────────────
@@ -1138,6 +1392,7 @@ func _process(delta: float) -> void:
 		_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
 		_weapon.rotation = t.get_rotation() + float(w.get("rot", 0))
 		_weapon.scale = Vector2(float(w.get("scale", 1)), float(w.get("scale", 1)))
+	_update_effects(delta)
 	_update_readout()
 
 
