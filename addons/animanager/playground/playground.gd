@@ -103,6 +103,15 @@ func _ready() -> void:
 	# frame's pose evaluation left them one frame behind - a visible
 	# pixel jitter against slow motion like an idle bob (2026-09-26).
 	process_priority = 100
+	# The playground drives every transform in _process (no physics),
+	# but a consuming project may enable physics_interpolation
+	# globally (angel-squadron does, for its HD-2D demo). Interpolating
+	# process-driven transforms through 60Hz physics snapshots
+	# temporally aliases slow motion - the weapon micro-jittered
+	# against the idle bob whenever the node itself was stationary
+	# (2026-09-26). No physics here, so interpolation is pure harm:
+	# off for the whole subtree.
+	physics_interpolation_mode = Node.PHYSICS_INTERPOLATION_MODE_OFF
 	get_window().title = "AniMate Playground"
 	get_tree().set_auto_accept_quit(false)
 	randomize()
