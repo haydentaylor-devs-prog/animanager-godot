@@ -436,9 +436,15 @@ func play_layer(
 		(_layer_frames_by_bone[bu] as Array).sort_custom(
 			func(a, b): return int(a.frame_number) < int(b.frame_number)
 		)
+	# Retrigger while a layer is active KEEPS the current blend
+	# weight - resetting to 0 dipped the arm toward the base pose on
+	# every press, which read as popping when an attack is spammed
+	# (2026-09-26). A fresh layer still fades in from 0.
+	var keep_weight := _layer_rig != null
 	_layer_rig = overlay
 	_layer_frame = 0.0
-	_layer_weight = 0.0
+	if not keep_weight:
+		_layer_weight = 0.0
 	_layer_fade = maxf(fade, 0.001)
 	_layer_fading_out = false
 	_layer_last_event_frame = -1
