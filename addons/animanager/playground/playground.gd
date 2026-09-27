@@ -107,6 +107,7 @@ var _ig_release_pending := false
 var _release_edit_path := ""
 var _show_frames_check: CheckBox
 var _frame_readout: Label
+var _fade_slider: HSlider
 
 var _dialog_layer: CanvasLayer
 
@@ -597,6 +598,10 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 	_show_frames_check = _toggle_into(box, "Display animation frame count",
 		false, func(v: bool) -> void:
 			_char().playback.show_frames = v
+			_store.save_store())
+	_fade_slider = _int_slider_into(box, "Crossfade duration (ms)",
+		50.0, 1000.0, 350.0, func(v: float) -> void:
+			_char().playback.fade_ms = int(v)
 			_store.save_store())
 	# Charge-hold for PLAIN playback: park the active clip on this
 	# frame for the duration below, as if the attack key were held —
@@ -1644,6 +1649,12 @@ func _bind_down(bind_name: String) -> bool:
 ## is let go. "complete" plays the clip to its final frame first;
 ## "cut" idles immediately; "cutoff" completes only when released at
 ## or past the chosen frame (an attack-commit point).
+## Playback-tunable crossfade length for every playground clip
+## switch (sandbox activation and all in-game transitions).
+func _fade_sec() -> float:
+	return maxf(0.05, float(_char().playback.get("fade_ms", 350)) / 1000.0)
+
+
 func _release_policy(path: String) -> Dictionary:
 	var all: Dictionary = _char().ingame.get("release", {})
 	var rel: Variant = all.get(path)
@@ -1732,7 +1743,7 @@ func _crossfade_to_path(path: String) -> void:
 		_activate_rig(path)
 		return
 	_ani.loop_override = 1
-	_ani.crossfade_to(res, 0.15)
+	_ani.crossfade_to(res, _fade_sec())
 	_active_rig_path = path
 	_apply_all_domains()
 
@@ -1763,10 +1774,10 @@ func _activate_rig(path: String) -> void:
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
-	_ani.rig = res
 	_ani.loop_override = 1
-	_ani.set_current_frame(0.0)
-	_ani.play()
+	# Blend into the new clip instead of hard-cutting (crossfade_to
+	# falls back to a cut when there is nothing to fade from).
+	_ani.crossfade_to(res, _fade_sec())
 	_apply_all_domains()
 	_apply_playback()
 	# Auto-play the recorded layering for this base (runtime supports
@@ -1859,6 +1870,8 @@ func _sync_playback_controls() -> void:
 		_hold_secs_slider.value = float(pb.get("hold_secs", 1.0))
 	if _show_frames_check != null:
 		_show_frames_check.button_pressed = bool(pb.get("show_frames", false))
+	if _fade_slider != null:
+		_fade_slider.value = float(pb.get("fade_ms", 350))
 
 
 func _apply_playback() -> void:
