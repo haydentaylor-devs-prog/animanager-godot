@@ -1417,15 +1417,36 @@ func _open_capture(existing: String) -> void:
 	_capture_label.custom_minimum_size = Vector2(260, 40)
 	_capture_label.add_theme_font_size_override("font_size", FONT_HEAD)
 	_capture_dialog.add_child(_capture_label)
-	_capture_dialog.add_cancel_button("Cancel")
+	var dlg_btns: Array = [
+		_capture_dialog.get_ok_button(),
+		_capture_dialog.add_cancel_button("Cancel"),
+	]
 	# Mouse buttons come from dialog buttons rather than raw click
 	# capture - raw capture would swallow the clicks aimed at
 	# Confirm/Cancel themselves.
-	_capture_dialog.add_button("LMB", false, "mouse1")
-	_capture_dialog.add_button("RMB", false, "mouse2")
-	_capture_dialog.add_button("MMB", false, "mouse3")
+	dlg_btns.append(_capture_dialog.add_button("LMB", false, "mouse1"))
+	dlg_btns.append(_capture_dialog.add_button("RMB", false, "mouse2"))
+	dlg_btns.append(_capture_dialog.add_button("MMB", false, "mouse3"))
 	if not existing.is_empty():
-		_capture_dialog.add_button("Unbind", false, "unbind")
+		dlg_btns.append(_capture_dialog.add_button("Unbind", false, "unbind"))
+	# Keys must reach the capture listener, not a focused button -
+	# otherwise Space/Enter "click" the button instead of binding.
+	for b in dlg_btns:
+		(b as Control).focus_mode = Control.FOCUS_NONE
+	# The dialog is a Window: while it has focus, key events route to
+	# ITS viewport and never reach this node's _input - listen on the
+	# dialog itself (the capture sat at "waiting for input..." forever
+	# otherwise, 2026-09-26).
+	_capture_dialog.window_input.connect(func(ev: InputEvent) -> void:
+		if not ev is InputEventKey:
+			return
+		var ke := ev as InputEventKey
+		if ke.pressed and not ke.echo and ke.keycode not in [
+			KEY_CTRL, KEY_SHIFT, KEY_ALT, KEY_META,
+		]:
+			_captured_key = OS.get_keycode_string(
+				ke.get_keycode_with_modifiers())
+			_capture_label.text = _captured_key)
 	_capture_dialog.confirmed.connect(func() -> void:
 		if not _captured_key.is_empty():
 			_commit_bind(_captured_key)
