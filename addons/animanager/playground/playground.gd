@@ -99,6 +99,10 @@ var _capture_rig_path := ""
 var _captured_key := ""
 var _capture_move_dir := ""
 var _held_bind_key := ""
+# In-game key-hold parking: parked-on-hold-frame by a held bind /
+# release resumes and then idles once the release events fired.
+var _ig_parked := false
+var _ig_release_pending := false
 
 var _dialog_layer: CanvasLayer
 
@@ -1366,6 +1370,14 @@ func _build_ingame_content() -> void:
 		row.add_child(bind)
 		_content.add_child(row)
 
+	var hold_hint := Label.new()
+	hold_hint.text = "Held binds park on the Playback 'Hold at frame' " \
+		+ "(-1 = off) until released."
+	hold_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hold_hint.modulate = Color(1, 1, 1, 0.6)
+	hold_hint.add_theme_font_size_override("font_size", 12)
+	_content.add_child(hold_hint)
+
 	_content.add_child(HSeparator.new())
 	# Flying/static characters have no walk clips - direction binds
 	# glide the node itself, animations untouched (2026-09-26).
@@ -1507,10 +1519,7 @@ func _input(event: InputEvent) -> void:
 		elif not mb.pressed and _held_bind_key == mname:
 			# Releases count even over the panel, so a clip can't
 			# stick on after a drag onto the UI.
-			_held_bind_key = ""
-			var midle: String = _char().ingame.idle
-			if not midle.is_empty():
-				_crossfade_to_path(midle)
+			_release_held_bind()
 		return
 	if not event is InputEventKey:
 		return
@@ -1542,10 +1551,7 @@ func _input(event: InputEvent) -> void:
 		var released_plain := OS.get_keycode_string(key_event.keycode)
 		if _held_bind_key != "" and (_held_bind_key == pressed_name
 				or _held_bind_key.ends_with(released_plain)):
-			_held_bind_key = ""
-			var idle: String = _char().ingame.idle
-			if not idle.is_empty():
-				_crossfade_to_path(idle)
+			_release_held_bind()
 
 
 ## Is the named bind currently held? Handles "Mouse<n>" and plain
@@ -1562,10 +1568,28 @@ func _bind_down(bind_name: String) -> bool:
 	return Input.is_key_pressed(OS.find_keycode_from_string(plain))
 
 
+func _release_held_bind() -> void:
+	_held_bind_key = ""
+	if _ig_parked and _ani != null:
+		# Parked on the hold frame: resume instead of cutting to
+		# idle, so the clip's release events still fire.
+		_ig_parked = false
+		_ig_release_pending = true
+		_ani.play()
+		return
+	var idle: String = _char().ingame.idle
+	if not idle.is_empty():
+		_crossfade_to_path(idle)
+
+
 func _crossfade_to_path(path: String) -> void:
 	var res := _load_rig_res(path)
 	if res == null:
 		return
+	# Any clip switch cancels hold/pending state (a re-press during
+	# the pending window keeps its fresh clip instead of idling).
+	_ig_parked = false
+	_ig_release_pending = false
 	if _ani.rig == null:
 		_activate_rig(path)
 		return
@@ -1596,6 +1620,8 @@ func _activate_rig(path: String) -> void:
 	_loops_off()
 	_hold_waiting = false
 	_hold_cooldown = false
+	_ig_parked = false
+	_ig_release_pending = false
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
@@ -1813,6 +1839,21 @@ func _process(delta: float) -> void:
 							held.play())
 			# secs < 0: hold forever - release with the button, the
 			# hold-frame slider, or by switching rigs.
+	# In-game: a held bind parks its clip on the Playback hold frame
+	# (-1 = off) until the input is released; the release resumes the
+	# clip first so the events past the hold (beam_end) fire, then
+	# _process idles once the playhead moves off the hold frame.
+	if _screen == Screen.INGAME and not _char_id.is_empty():
+		var ig_hold := int(_char().playback.get("hold_frame", -1))
+		var at_hold: bool = ig_hold >= 0 and int(_ani.get_current_frame()) == ig_hold
+		if not _held_bind_key.is_empty() and not _ig_parked and at_hold and _ani.is_playing():
+			_ani.pause()
+			_ig_parked = true
+		elif _ig_release_pending and _ani.is_playing() and not at_hold:
+			_ig_release_pending = false
+			var post_idle: String = _char().ingame.idle
+			if not post_idle.is_empty():
+				_crossfade_to_path(post_idle)
 	# In-game static movement: bound direction inputs glide the node
 	# itself - no clip switching, made for flyers with no walk anims.
 	if _screen == Screen.INGAME and not _char_id.is_empty() \
