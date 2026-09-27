@@ -103,6 +103,7 @@ var _ig_parked := false
 var _ig_release_pending := false
 # In-game per-animation release policy editor (open rig path).
 var _release_edit_path := ""
+var _anim_aim_bone := ""
 var _show_frames_check: CheckBox
 var _frame_readout: Label
 var _fade_slider: HSlider
@@ -1288,7 +1289,12 @@ func _build_event_editor(ev_name: String) -> void:
 
 
 func _fx_direction(spawn_global: Vector2) -> Vector2:
-	if _aim_enabled:
+	var cursor_aim := _aim_enabled
+	if not cursor_aim and not _char_id.is_empty() \
+			and not _active_rig_path.is_empty():
+		cursor_aim = bool(
+			_release_policy(_active_rig_path).get("fx_aim", false))
+	if cursor_aim:
 		var d := get_global_mouse_position() - spawn_global
 		if d.length() > 1.0:
 			return d.normalized()
@@ -1685,6 +1691,40 @@ func _build_release_editor() -> void:
 		ch.modulate = Color(1, 1, 1, 0.6)
 		ch.add_theme_font_size_override("font_size", 12)
 		_content.add_child(ch)
+	_content.add_child(HSeparator.new())
+	# Per-animation cursor aiming (2026-09-27): a bone (an arm) can
+	# track the cursor while this clip plays, and/or the clip's
+	# spawned effects (projectiles, beam) can fire toward the cursor.
+	_caption_into(_content, "Cursor aiming (while this animation plays):")
+	_toggle_into(_content, "Aim a bone at the cursor",
+		bool(rel.get("aim_enabled", false)), func(v: bool) -> void:
+			_set_release(_release_edit_path, "aim_enabled", v)
+			_rebuild_content())
+	if bool(rel.get("aim_enabled", false)):
+		_caption_into(_content, "Aimed bone:")
+		var aim_pick := OptionButton.new()
+		_fill_bone_pick(aim_pick, "arm")
+		var aim_matched := false
+		for i in range(aim_pick.item_count):
+			if aim_pick.get_item_text(i) == String(rel.get("aim_bone", "")):
+				aim_pick.select(i)
+				aim_matched = true
+		# Commit the displayed default (same write-back rule as the
+		# event editor's dropdowns).
+		if not aim_matched and aim_pick.selected >= 0:
+			_set_release(_release_edit_path, "aim_bone",
+				aim_pick.get_item_text(aim_pick.selected))
+		aim_pick.item_selected.connect(func(i: int) -> void:
+			_set_release(_release_edit_path, "aim_bone",
+				aim_pick.get_item_text(i)))
+		_content.add_child(aim_pick)
+		_int_slider_into(_content, "Aim strength (%)", 0.0, 100.0,
+			float(rel.get("aim_weight", 100)), func(v: float) -> void:
+				_set_release(_release_edit_path, "aim_weight", int(v)))
+	_toggle_into(_content, "Effects aim at the cursor",
+		bool(rel.get("fx_aim", false)), func(v: bool) -> void:
+			_set_release(_release_edit_path, "fx_aim", v))
+	_content.add_child(HSeparator.new())
 	# Charge-hold, per animation: park on this frame (auto-play uses
 	# the timer; a held bind parks while the input is down).
 	_int_slider_into(_content, "Hold at frame (-1 = off)", -1.0, 119.0,
@@ -1741,6 +1781,7 @@ func _crossfade_to_path(path: String) -> void:
 	_ani.crossfade_to(res, _fade_sec())
 	_ani.loop_override = 1
 	_active_rig_path = path
+	_anim_aim_bone = ""
 	_apply_all_domains()
 
 
@@ -1776,6 +1817,7 @@ func _activate_rig(path: String) -> void:
 	# clip keeps its own effective looping through the blend.
 	_ani.crossfade_to(res, _fade_sec())
 	_ani.loop_override = 1
+	_anim_aim_bone = ""
 	_apply_all_domains()
 	_apply_playback()
 	# Auto-play the recorded layering for this base (runtime supports
@@ -2077,6 +2119,23 @@ func _process(delta: float) -> void:
 		var local_target := _ani.to_local(get_global_mouse_position())
 		_ani.set_bone_aim(
 			aim_bone, (local_target - origin).angle(), _aim_weight)
+	# Per-animation cursor aim (Advanced menu): while this clip plays,
+	# its chosen bone tracks the cursor. The Layering menu's manual
+	# aim toggle overrides while enabled (explicit test tool).
+	elif not _char_id.is_empty() and not _active_rig_path.is_empty() \
+			and _ani.rig != null:
+		var arel := _release_policy(_active_rig_path)
+		var abone := String(arel.get("aim_bone", ""))
+		if bool(arel.get("aim_enabled", false)) and not abone.is_empty():
+			var aorigin: Vector2 = _ani.get_bone_world_transform(abone).origin
+			var atarget := _ani.to_local(get_global_mouse_position())
+			_ani.set_bone_aim(abone, (atarget - aorigin).angle(),
+				float(arel.get("aim_weight", 100)) / 100.0)
+			_anim_aim_bone = abone
+		elif not _anim_aim_bone.is_empty():
+			# The active clip aims no bone: release the previous one.
+			_ani.set_bone_aim(_anim_aim_bone, 0.0, 0.0)
+			_anim_aim_bone = ""
 	# Weapon live follow (not while fitting).
 	var w := {} if _active_rig_path.is_empty() else \
 		_store.effective(_char_id, _active_rig_path, "weapon")
