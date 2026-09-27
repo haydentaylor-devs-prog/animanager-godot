@@ -866,6 +866,30 @@ func _build_weapon_menu() -> void:
 		bool(w.get("behind", false)), func(v: bool) -> void:
 			_domain_edit("weapon", "behind", v)
 			_apply_weapon_layer())
+	# Crossfades blend each bone's LOCAL rotation, so the hand's
+	# composed WORLD rotation can swing through a wide transient arc
+	# even when both clips hold the staff upright - seen as the staff
+	# waving ~90 deg on in-game release-to-idle fades (2026-09-27).
+	# This pins the weapon bone's world rotation via set_bone_aim;
+	# children keep their animated locals.
+	_toggle_into(_content, "Steady hand angle (lock weapon bone)",
+		bool(w.get("steady", false)), func(v: bool) -> void:
+			_domain_edit("weapon", "steady", v)
+			var t2 := _domain_target("weapon")
+			var t2bone := String(t2.get("bone", ""))
+			if v and not t2.has("steady_deg") and _ani != null \
+					and not t2bone.is_empty():
+				# First enable captures the hand's CURRENT angle, so
+				# the staff stays put instead of snapping.
+				t2.steady_deg = rad_to_deg(
+					_ani.get_bone_world_transform(t2bone).get_rotation())
+				_store.save_store()
+			_apply_domain("weapon")
+			_show_submenu("weapon"))
+	_int_slider_into(_content, "Steady angle (deg)", -180.0, 180.0,
+		float(w.get("steady_deg", 0.0)), func(v: float) -> void:
+			_domain_edit("weapon", "steady_deg", v)
+			_apply_domain("weapon"))
 	_btn_into(_content, "Save attachment", _save_attachment)
 	_btn_into(_content, "Remove weapon", func() -> void:
 		var t := _domain_target("weapon")
@@ -1671,6 +1695,12 @@ func _apply_domain(domain: String) -> void:
 				float(t.lx), float(t.ly), float(t.lz))
 		"weapon":
 			_apply_weapon(t)
+			var steady_bone := String(t.get("bone", ""))
+			if not steady_bone.is_empty():
+				_ani.set_bone_aim(
+					steady_bone,
+					deg_to_rad(float(t.get("steady_deg", 0.0))),
+					1.0 if bool(t.get("steady", false)) else 0.0)
 
 
 func _apply_weapon(w: Dictionary) -> void:
