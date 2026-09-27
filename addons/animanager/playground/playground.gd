@@ -1961,7 +1961,11 @@ func _process(delta: float) -> void:
 			and bool(_char().playback.get("show_frames", false))
 		_frame_readout.visible = show_fr
 		if show_fr:
-			_frame_readout.text = "Frame %d / %d" % [
+			var anim_name := _active_rig_path.get_file().get_basename()
+			var fr_entry := _store.rig_entry(_char_id, _active_rig_path)
+			if not fr_entry.is_empty():
+				anim_name = String(fr_entry.name)
+			_frame_readout.text = "%s — Frame %d / %d" % [anim_name,
 				int(_ani.get_current_frame()), _ani.rig.total_frames]
 	if _screen == Screen.SANDBOX:
 		var tilt := _joy.deflect if _joy != null else Vector2.ZERO
@@ -1971,16 +1975,20 @@ func _process(delta: float) -> void:
 		elif bool(_char().playback.sway) and not _attach_mode:
 			_sway_t += delta
 			_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
-	# Auto charge hold (per animation, set in its Advanced menu):
-	# pause on the hold frame, resume after hold_secs. The cooldown
+	# Charge hold (per animation, Advanced menu). A TIMED hold (secs
+	# >= 0) takes priority in every playback mode: the clip parks on
+	# the hold frame for the set time - held key or not - then
+	# resumes (2026-09-27). An INFINITE hold (-1) parks until
+	# 'Release Infinite Hold' in plain playback, or tracks the held
+	# input via the block below when bind-triggered. The cooldown
 	# keeps the resume from re-parking until the playhead has left
-	# the hold frame (looping clips re-arm on the next pass). Only
-	# when no bound input is held and no release tail is playing -
-	# those own the playhead.
+	# the hold frame (looping clips re-arm on the next pass).
 	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
-			and not _active_rig_path.is_empty() \
-			and _held_bind_key.is_empty() and not _ig_release_pending:
-		var hold_f := int(_release_policy(_active_rig_path).get("hold_frame", -1))
+			and not _active_rig_path.is_empty():
+		var rel_hold := _release_policy(_active_rig_path)
+		var hold_f := int(rel_hold.get("hold_frame", -1))
+		var hold_secs := float(rel_hold.get("hold_secs", 1.0))
+		var timed: bool = hold_secs >= 0.0
 		if _hold_cooldown and int(_ani.get_current_frame()) != hold_f:
 			_hold_cooldown = false
 		elif _hold_waiting and hold_f < 0:
@@ -1990,30 +1998,33 @@ func _process(delta: float) -> void:
 			_ani.play()
 		elif hold_f >= 0 and not _hold_waiting and not _hold_cooldown \
 				and _ani.is_playing() \
-				and int(_ani.get_current_frame()) == hold_f:
+				and int(_ani.get_current_frame()) == hold_f \
+				and (timed or (_held_bind_key.is_empty() \
+					and not _ig_release_pending)):
 			_ani.pause()
 			_hold_waiting = true
-			var secs := float(
-				_release_policy(_active_rig_path).get("hold_secs", 1.0))
-			if secs >= 0.0:
+			if timed:
 				var held := _ani
-				get_tree().create_timer(maxf(0.1, secs)) \
+				get_tree().create_timer(maxf(0.1, hold_secs)) \
 					.timeout.connect(func() -> void:
 						_hold_waiting = false
 						_hold_cooldown = true
 						if is_instance_valid(held) and held == _ani:
 							held.play())
-			# secs < 0: hold forever - release with the button, the
-			# hold-frame slider, or by switching rigs.
+			# infinite: released by the button, the hold-frame
+			# slider, or a rig switch.
 	# Held-bind hold: a held input parks its clip on the animation's
 	# hold frame (-1 = off) until released; the release resumes the
 	# clip first so the events past the hold (beam_end) fire, then
 	# _process idles once the clip reaches its final frame.
 	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
 			and not _active_rig_path.is_empty():
-		var ig_hold := int(_release_policy(_active_rig_path).get("hold_frame", -1))
+		var ig_rel := _release_policy(_active_rig_path)
+		var ig_hold := int(ig_rel.get("hold_frame", -1))
 		var at_hold: bool = ig_hold >= 0 and int(_ani.get_current_frame()) == ig_hold
-		if not _held_bind_key.is_empty() and not _ig_parked and at_hold and _ani.is_playing():
+		if not _held_bind_key.is_empty() and not _ig_parked and at_hold \
+				and _ani.is_playing() \
+				and float(ig_rel.get("hold_secs", 1.0)) < 0.0:
 			_ani.pause()
 			_ig_parked = true
 		elif _ig_release_pending and _ani.is_playing():
