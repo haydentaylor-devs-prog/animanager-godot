@@ -59,17 +59,14 @@ var _menu_root: Control
 var _work_root: Control
 var _panel_tab: Button
 var _panel_collapsed := false
-var _content: VBoxContainer  # swapped area (home / submenu / ingame)
+var _content: VBoxContainer  # swapped area (home / submenus / advanced)
 var _char_list_box: VBoxContainer
 var _name_label: Label
-var _sandbox_btn: Button
-var _ingame_btn: Button
 var _preset_pick: OptionButton
 var _zoom_slider: HSlider
 var _speed_slider: HSlider
 var _sway_check: CheckBox
-var _hold_frame_slider: HSlider
-var _hold_secs_slider: HSlider
+var _joy_check: CheckBox
 var _hold_waiting := false
 var _hold_cooldown := false
 var _preset_name_edit: LineEdit
@@ -299,6 +296,8 @@ func _enter_character(id: String) -> void:
 	_screen = Screen.SANDBOX
 	_active_rig_path = ""
 	_release_edit_path = ""
+	_assigning_idle = false
+	_held_bind_key = ""
 	_menu_root.visible = false
 	# Opening a character resumes its last loaded/saved preset — the
 	# working session between visits is the preset, so tweaks NOT
@@ -326,10 +325,9 @@ func _enter_character(id: String) -> void:
 		_joy.offset_top = -218
 		_joy.offset_bottom = -48
 		_layer.add_child(_joy)
-	_joy.visible = true
+	_joy.visible = bool(_char().playback.get("joystick", true))
 
 	_name_label.text = String(_store.character(id).name)
-	_apply_mode_buttons()
 	_refresh_presets()
 	_apply_playback()
 	_sync_playback_controls()
@@ -391,24 +389,17 @@ func _build_workspace() -> void:
 	_name_label.add_theme_font_size_override("font_size", 22)
 	v.add_child(_name_label)
 
-	var modes := HBoxContainer.new()
-	_sandbox_btn = Button.new()
-	_sandbox_btn.text = "Sandbox Mode"
-	_sandbox_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_sandbox_btn.pressed.connect(func() -> void: _set_mode(Screen.SANDBOX))
-	_ingame_btn = Button.new()
-	_ingame_btn.text = "In-Game Mode"
-	_ingame_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_ingame_btn.pressed.connect(func() -> void: _set_mode(Screen.INGAME))
-	modes.add_child(_sandbox_btn)
-	modes.add_child(_ingame_btn)
-	v.add_child(modes)
-
 	_zoom_slider = _slider_into(v, "Zoom", 0.5, 10.0, 3.0,
 		func(val: float) -> void:
 			_char().playback.zoom = val
 			_apply_playback()
 			_store.save_store())
+	_joy_check = _toggle_into(v, "Show joystick", true,
+		func(on: bool) -> void:
+			_char().playback.joystick = on
+			_store.save_store()
+			if _joy != null:
+				_joy.visible = on and _screen == Screen.SANDBOX)
 
 	_build_presets_section(v)
 	_build_playback_section(v)
@@ -428,32 +419,6 @@ func _build_workspace() -> void:
 
 func _char() -> Dictionary:
 	return _store.character(_char_id)
-
-
-func _set_mode(mode: Screen) -> void:
-	_screen = mode
-	_held_bind_key = ""
-	_assigning_idle = false
-	_apply_mode_buttons()
-	if mode == Screen.INGAME:
-		_joy.visible = false
-		# Play area empty until the idle is assigned.
-		var idle: String = _char().ingame.idle
-		if idle.is_empty() or _store.rig_entry(_char_id, idle).is_empty():
-			_ani.rig = null
-		else:
-			_activate_rig(idle)
-	else:
-		_joy.visible = true
-		if _active_rig_path.is_empty() and not (_char().rigs as Array).is_empty():
-			_activate_rig(_char().rigs[0].path)
-	_rebuild_content()
-
-
-func _apply_mode_buttons() -> void:
-	var blue := Color(0.3, 0.55, 1.0)
-	_sandbox_btn.modulate = blue if _screen == Screen.SANDBOX else Color.WHITE
-	_ingame_btn.modulate = blue if _screen == Screen.INGAME else Color.WHITE
 
 
 func _prompt_save_and_return() -> void:
@@ -603,19 +568,7 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 		50.0, 1000.0, 350.0, func(v: float) -> void:
 			_char().playback.fade_ms = int(v)
 			_store.save_store())
-	# Charge-hold for PLAIN playback: park the active clip on this
-	# frame for the duration below, as if the attack key were held —
-	# lets a beam chargeup + hold be tested without setting up a
-	# layer first (the Layering submenu has its own overlay hold).
-	_hold_frame_slider = _int_slider_into(box, "Hold at frame (-1 = off)",
-		-1.0, 119.0, -1.0, func(v: float) -> void:
-			_char().playback.hold_frame = int(v)
-			_store.save_store())
-	_hold_secs_slider = _int_slider_into(box, "Hold seconds (-1 = forever)",
-		-1.0, 10.0, 1.0, func(v: float) -> void:
-			_char().playback.hold_secs = v
-			_store.save_store())
-	_btn_into(box, "Release hold now", func() -> void:
+	_btn_into(box, "Release Infinite Hold", func() -> void:
 		if _hold_waiting and _ani != null:
 			_hold_waiting = false
 			_hold_cooldown = true
@@ -630,13 +583,18 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 func _rebuild_content() -> void:
 	for child in _content.get_children():
 		child.queue_free()
-	if _screen == Screen.INGAME:
-		_build_ingame_content()
+	if not _release_edit_path.is_empty():
+		_build_release_editor()
 	else:
 		_build_sandbox_home()
 
 
 func _build_sandbox_home() -> void:
+	var cs_head := Label.new()
+	cs_head.text = "Character Settings"
+	cs_head.add_theme_font_size_override("font_size", FONT_HEAD)
+	cs_head.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
+	_content.add_child(cs_head)
 	_btn_into(_content, "Physics Options", func() -> void: _show_submenu("physics"))
 	_btn_into(_content, "Shading Options", func() -> void: _show_submenu("shading"))
 	_btn_into(_content, "Weapon Menu", func() -> void: _show_submenu("weapon"))
@@ -644,6 +602,8 @@ func _build_sandbox_home() -> void:
 	_btn_into(_content, "Events & Effects", func() -> void: _show_submenu("events"))
 	var sep := HSeparator.new()
 	_content.add_child(sep)
+	_build_movement_section()
+	_content.add_child(HSeparator.new())
 	var head := Label.new()
 	head.text = "Animations"
 	head.add_theme_font_size_override("font_size", FONT_HEAD)
@@ -654,6 +614,49 @@ func _build_sandbox_home() -> void:
 		_content.add_child(_rig_row(r))
 
 
+func _build_movement_section() -> void:
+	var box := _collapsible(_content, "Movement", true)
+	var idle: String = _char().ingame.idle
+	var idle_btn := Button.new()
+	idle_btn.text = "Reassign idle" if not idle.is_empty() else "Assign Idle"
+	idle_btn.add_theme_font_size_override("font_size", FONT)
+	idle_btn.pressed.connect(func() -> void:
+		_assigning_idle = true
+		_rebuild_content())
+	box.add_child(idle_btn)
+	if _assigning_idle:
+		var hint := Label.new()
+		hint.text = "Click an animation below to make it the idle."
+		hint.modulate = Color(0.5, 0.8, 1.0)
+		hint.add_theme_font_size_override("font_size", 12)
+		box.add_child(hint)
+	# Flying/static characters have no walk clips - direction binds
+	# glide the node itself, animations untouched.
+	_toggle_into(box, "Static movement inputs (flyer glide)",
+		bool(_char().ingame.get("move_enabled", false)),
+		func(v: bool) -> void:
+			_char().ingame.move_enabled = v
+			_store.save_store()
+			_rebuild_content())
+	if bool(_char().ingame.get("move_enabled", false)):
+		var mv: Dictionary = _char().ingame.get("move", {})
+		for dir in ["left", "right", "up", "down"]:
+			var d := String(dir)
+			var mrow := HBoxContainer.new()
+			var ml := Label.new()
+			ml.text = "Move " + d
+			ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ml.add_theme_font_size_override("font_size", FONT)
+			mrow.add_child(ml)
+			var mbind := Button.new()
+			var mkey := String(mv.get(d, ""))
+			mbind.text = mkey if not mkey.is_empty() else "Assign"
+			mbind.custom_minimum_size = Vector2(110, 0)
+			mbind.pressed.connect(func() -> void: _prompt_movebind(d))
+			mrow.add_child(mbind)
+			box.add_child(mrow)
+
+
 func _rig_row(r: Dictionary) -> Control:
 	var wrap := PanelContainer.new()
 	var v := VBoxContainer.new()
@@ -661,13 +664,22 @@ func _rig_row(r: Dictionary) -> Control:
 	var rig_path: String = r.path
 
 	var name_btn := Button.new()
-	name_btn.text = String(r.name)
+	name_btn.text = String(r.name) \
+		+ ("   [IDLE]" if rig_path == String(_char().ingame.idle) else "")
 	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	name_btn.add_theme_font_size_override("font_size", FONT)
-	if rig_path == _active_rig_path:
+	if _assigning_idle:
+		name_btn.modulate = Color(0.5, 1.0, 0.6)
+	elif rig_path == _active_rig_path:
 		name_btn.modulate = Color(0.5, 0.8, 1.0)
 	name_btn.pressed.connect(func() -> void:
-		_activate_rig(rig_path)
+		if _assigning_idle:
+			_char().ingame.idle = rig_path
+			_assigning_idle = false
+			_store.save_store()
+			_activate_rig(rig_path)
+		else:
+			_activate_rig(rig_path)
 		_rebuild_content())
 	v.add_child(name_btn)
 
@@ -698,6 +710,22 @@ func _rig_row(r: Dictionary) -> Control:
 		grp.text = ""
 		grp.modulate = Color(0.4, 0.4, 0.4)
 	row.add_child(grp)
+
+	var bind := Button.new()
+	var bkey: String = _char().ingame.binds.get(rig_path, "")
+	bind.text = bkey if not bkey.is_empty() else "Assign"
+	bind.tooltip_text = "Bind a key or mouse button: hold to play this animation"
+	bind.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bind.pressed.connect(func() -> void: _prompt_keybind(rig_path))
+	row.add_child(bind)
+
+	var adv := Button.new()
+	adv.text = "Advanced"
+	adv.tooltip_text = "Release behavior + hold-frame settings"
+	adv.pressed.connect(func() -> void:
+		_release_edit_path = rig_path
+		_rebuild_content())
+	row.add_child(adv)
 
 	var dots := MenuButton.new()
 	dots.text = "⋮"
@@ -1398,91 +1426,6 @@ func _update_effects(delta: float) -> void:
 
 # ── In-Game mode ───────────────────────────────────────────────────
 
-func _build_ingame_content() -> void:
-	if not _release_edit_path.is_empty():
-		_build_release_editor()
-		return
-	var idle: String = _char().ingame.idle
-	var idle_btn := Button.new()
-	idle_btn.text = "Reassign idle" if not idle.is_empty() else "Assign Idle"
-	idle_btn.add_theme_font_size_override("font_size", FONT)
-	idle_btn.pressed.connect(func() -> void:
-		_assigning_idle = true
-		_rebuild_content())
-	_content.add_child(idle_btn)
-	if _assigning_idle:
-		var hint := Label.new()
-		hint.text = "Click an animation below to make it the idle."
-		hint.modulate = Color(0.5, 0.8, 1.0)
-		hint.add_theme_font_size_override("font_size", 12)
-		_content.add_child(hint)
-
-	for r in _char().rigs:
-		var rig_path: String = r.path
-		var row := HBoxContainer.new()
-		var nm := Button.new()
-		nm.text = String(r.name) + ("   [IDLE]" if rig_path == idle else "")
-		nm.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		nm.add_theme_font_size_override("font_size", FONT)
-		if _assigning_idle:
-			nm.modulate = Color(0.5, 1.0, 0.6)
-		nm.pressed.connect(func() -> void:
-			if _assigning_idle:
-				_char().ingame.idle = rig_path
-				_assigning_idle = false
-				_store.save_store()
-				_activate_rig(rig_path)
-				_rebuild_content()
-			else:
-				_release_edit_path = rig_path
-				_rebuild_content())
-		row.add_child(nm)
-		var bind := Button.new()
-		var key: String = _char().ingame.binds.get(rig_path, "")
-		bind.text = key if not key.is_empty() else "Assign"
-		bind.custom_minimum_size = Vector2(110, 0)
-		bind.pressed.connect(func() -> void: _prompt_keybind(rig_path))
-		row.add_child(bind)
-		_content.add_child(row)
-
-	var hold_hint := Label.new()
-	hold_hint.text = "Held binds park on the Playback 'Hold at frame' " \
-		+ "(-1 = off) until released. Click an animation's name to " \
-		+ "set its release behavior."
-	hold_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hold_hint.modulate = Color(1, 1, 1, 0.6)
-	hold_hint.add_theme_font_size_override("font_size", 12)
-	_content.add_child(hold_hint)
-
-	_content.add_child(HSeparator.new())
-	# Flying/static characters have no walk clips - direction binds
-	# glide the node itself, animations untouched (2026-09-26).
-	_toggle_into(_content, "Static movement inputs (flyer glide)",
-		bool(_char().ingame.get("move_enabled", false)),
-		func(v: bool) -> void:
-			_char().ingame.move_enabled = v
-			_store.save_store()
-			_rebuild_content())
-	if bool(_char().ingame.get("move_enabled", false)):
-		var mv: Dictionary = _char().ingame.get("move", {})
-		for dir in ["left", "right", "up", "down"]:
-			var d := String(dir)
-			var mrow := HBoxContainer.new()
-			var ml := Label.new()
-			ml.text = "Move " + d
-			ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			ml.add_theme_font_size_override("font_size", FONT)
-			mrow.add_child(ml)
-			var mbind := Button.new()
-			var mkey := String(mv.get(d, ""))
-			mbind.text = mkey if not mkey.is_empty() else "Assign"
-			mbind.custom_minimum_size = Vector2(110, 0)
-			mbind.pressed.connect(func() -> void: _prompt_movebind(d))
-			mrow.add_child(mbind)
-			_content.add_child(mrow)
-
-
 func _prompt_keybind(rig_path: String) -> void:
 	_capture_rig_path = rig_path
 	_capture_move_dir = ""
@@ -1580,11 +1523,15 @@ func _close_capture() -> void:
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and _capture_dialog == null \
-			and _screen == Screen.INGAME and _ani != null \
-			and _ani.rig != null:
+			and _screen == Screen.SANDBOX and _ani != null \
+			and _ani.rig != null and not _attach_mode:
 		var mb := event as InputEventMouseButton
-		var over_ui := _work_root != null and _work_root.visible \
-			and _work_root.get_global_rect().has_point(mb.position)
+		var over_ui := (_work_root != null and _work_root.visible \
+			and _work_root.get_global_rect().has_point(mb.position)) \
+			or (_joy != null and _joy.visible \
+			and _joy.get_global_rect().has_point(mb.position)) \
+			or (_panel_tab != null and _panel_tab.visible \
+			and _panel_tab.get_global_rect().has_point(mb.position))
 		var mname := "Mouse%d" % mb.button_index
 		var mbinds: Dictionary = _char().ingame.binds
 		if mb.pressed and not over_ui:
@@ -1612,13 +1559,16 @@ func _input(event: InputEvent) -> void:
 				key_event.get_keycode_with_modifiers())
 			_capture_label.text = _captured_key
 		return
-	# In-game playback: bound key held -> that clip; released -> idle.
-	if _screen != Screen.INGAME or _ani == null or _ani.rig == null:
+	# Bound key held -> that clip; released -> idle.
+	if _screen != Screen.SANDBOX or _ani == null or _ani.rig == null:
 		return
 	var pressed_name := OS.get_keycode_string(
 		key_event.get_keycode_with_modifiers())
 	var binds: Dictionary = _char().ingame.binds
 	if key_event.pressed:
+		# Typing in a text field must not fire attacks.
+		if get_viewport().gui_get_focus_owner() is LineEdit:
+			return
 		for rig_path in binds:
 			if binds[rig_path] == pressed_name:
 				_held_bind_key = pressed_name
@@ -1660,12 +1610,13 @@ func _release_policy(path: String) -> Dictionary:
 	var rel: Variant = all.get(path)
 	if rel is Dictionary:
 		return rel
-	return {"mode": "complete", "frame": 0}
+	return {"mode": "complete", "frame": 0, "hold_frame": -1, "hold_secs": 1.0}
 
 
 func _set_release(path: String, key: String, value: Variant) -> void:
 	var all: Dictionary = _char().ingame.get("release", {})
-	var rel: Dictionary = all.get(path, {"mode": "complete", "frame": 0})
+	var rel: Dictionary = all.get(path,
+		{"mode": "complete", "frame": 0, "hold_frame": -1, "hold_secs": 1.0})
 	rel[key] = value
 	all[path] = rel
 	_char().ingame.release = all
@@ -1674,11 +1625,11 @@ func _set_release(path: String, key: String, value: Variant) -> void:
 
 func _build_release_editor() -> void:
 	var title := Label.new()
-	title.text = _release_edit_path.get_file().get_basename() \
-		+ " - when its button is released:"
-	title.add_theme_font_size_override("font_size", FONT)
+	title.text = _release_edit_path.get_file().get_basename() + " - Advanced"
+	title.add_theme_font_size_override("font_size", FONT_HEAD)
 	_content.add_child(title)
 	var rel := _release_policy(_release_edit_path)
+	_caption_into(_content, "When its button is released:")
 	var modes := ["complete", "cut", "cutoff"]
 	var pick := OptionButton.new()
 	pick.add_item("Complete the animation")
@@ -1699,6 +1650,14 @@ func _build_release_editor() -> void:
 		ch.modulate = Color(1, 1, 1, 0.6)
 		ch.add_theme_font_size_override("font_size", 12)
 		_content.add_child(ch)
+	# Charge-hold, per animation: park on this frame (auto-play uses
+	# the timer; a held bind parks while the input is down).
+	_int_slider_into(_content, "Hold at frame (-1 = off)", -1.0, 119.0,
+		float(rel.get("hold_frame", -1)), func(v: float) -> void:
+			_set_release(_release_edit_path, "hold_frame", int(v)))
+	_int_slider_into(_content, "Hold seconds (-1 = forever)", -1.0, 10.0,
+		float(rel.get("hold_secs", 1.0)), func(v: float) -> void:
+			_set_release(_release_edit_path, "hold_secs", v))
 	_btn_into(_content, "Back", func() -> void:
 		_release_edit_path = ""
 		_rebuild_content())
@@ -1868,10 +1827,8 @@ func _sync_playback_controls() -> void:
 		_speed_slider.value = float(pb.speed)
 	if _sway_check != null:
 		_sway_check.button_pressed = bool(pb.sway)
-	if _hold_frame_slider != null:
-		_hold_frame_slider.value = float(pb.get("hold_frame", -1))
-	if _hold_secs_slider != null:
-		_hold_secs_slider.value = float(pb.get("hold_secs", 1.0))
+	if _joy_check != null:
+		_joy_check.button_pressed = bool(pb.get("joystick", true))
 	if _show_frames_check != null:
 		_show_frames_check.button_pressed = bool(pb.get("show_frames", false))
 	if _fade_slider != null:
@@ -1980,12 +1937,16 @@ func _process(delta: float) -> void:
 		elif bool(_char().playback.sway) and not _attach_mode:
 			_sway_t += delta
 			_ani.position = _base_pos + Vector2(sin(_sway_t * 2.2) * 90.0, 0)
-	# Plain-playback charge hold: pause on the stored hold frame, then
-	# resume after hold_secs. The cooldown keeps the resume from
-	# re-parking until the playhead has left the hold frame (looping
-	# clips re-arm on the next pass).
-	if _screen == Screen.SANDBOX and not _char_id.is_empty():
-		var hold_f := int(_char().playback.get("hold_frame", -1))
+	# Auto charge hold (per animation, set in its Advanced menu):
+	# pause on the hold frame, resume after hold_secs. The cooldown
+	# keeps the resume from re-parking until the playhead has left
+	# the hold frame (looping clips re-arm on the next pass). Only
+	# when no bound input is held and no release tail is playing -
+	# those own the playhead.
+	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
+			and not _active_rig_path.is_empty() \
+			and _held_bind_key.is_empty() and not _ig_release_pending:
+		var hold_f := int(_release_policy(_active_rig_path).get("hold_frame", -1))
 		if _hold_cooldown and int(_ani.get_current_frame()) != hold_f:
 			_hold_cooldown = false
 		elif _hold_waiting and hold_f < 0:
@@ -1998,7 +1959,8 @@ func _process(delta: float) -> void:
 				and int(_ani.get_current_frame()) == hold_f:
 			_ani.pause()
 			_hold_waiting = true
-			var secs := float(_char().playback.get("hold_secs", 1.0))
+			var secs := float(
+				_release_policy(_active_rig_path).get("hold_secs", 1.0))
 			if secs >= 0.0:
 				var held := _ani
 				get_tree().create_timer(maxf(0.1, secs)) \
@@ -2009,12 +1971,13 @@ func _process(delta: float) -> void:
 							held.play())
 			# secs < 0: hold forever - release with the button, the
 			# hold-frame slider, or by switching rigs.
-	# In-game: a held bind parks its clip on the Playback hold frame
-	# (-1 = off) until the input is released; the release resumes the
+	# Held-bind hold: a held input parks its clip on the animation's
+	# hold frame (-1 = off) until released; the release resumes the
 	# clip first so the events past the hold (beam_end) fire, then
-	# _process idles once the playhead moves off the hold frame.
-	if _screen == Screen.INGAME and not _char_id.is_empty():
-		var ig_hold := int(_char().playback.get("hold_frame", -1))
+	# _process idles once the clip reaches its final frame.
+	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
+			and not _active_rig_path.is_empty():
+		var ig_hold := int(_release_policy(_active_rig_path).get("hold_frame", -1))
 		var at_hold: bool = ig_hold >= 0 and int(_ani.get_current_frame()) == ig_hold
 		if not _held_bind_key.is_empty() and not _ig_parked and at_hold and _ani.is_playing():
 			_ani.pause()
@@ -2033,9 +1996,9 @@ func _process(delta: float) -> void:
 					# mid-fade read as the whole clip replaying.
 					_ani.loop_override = 0
 					_crossfade_to_path(post_idle)
-	# In-game static movement: bound direction inputs glide the node
-	# itself - no clip switching, made for flyers with no walk anims.
-	if _screen == Screen.INGAME and not _char_id.is_empty() \
+	# Static movement: bound direction inputs glide the node itself -
+	# no clip switching, made for flyers with no walk anims.
+	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
 			and bool(_char().ingame.get("move_enabled", false)) \
 			and _capture_dialog == null:
 		var mvb: Dictionary = _char().ingame.get("move", {})

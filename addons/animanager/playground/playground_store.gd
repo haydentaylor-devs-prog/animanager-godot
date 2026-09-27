@@ -49,7 +49,7 @@ static func default_playback() -> Dictionary:
 	# first look, and sway masks/excites physics the user didn't ask for.
 	return {
 		"zoom": 3.0, "speed": 1.0, "sway": false,
-		"hold_frame": -1, "hold_secs": 1.0, "fade_ms": 350,
+		"joystick": true, "fade_ms": 350,
 	}
 
 
