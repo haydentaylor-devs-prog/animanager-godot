@@ -104,6 +104,9 @@ var _events_expanded := ""  # event name whose editor is open
 var _projectiles: Array = []  # [{node, vel, ttl}]
 var _beam: Sprite2D
 var _beam_cfg: Dictionary = {}
+# Live beam length: jumps to max on fire, or grows from 0 at the
+# binding's extend rate when its "gradual" flag is on (2026-09-26).
+var _beam_len := 0.0
 # Anchored spritesheet loops (charge-up effects): follow a bone +
 # bone-local offset every frame, flip through sheet frames, die when
 # their configured stop event fires.
@@ -1075,9 +1078,17 @@ func _build_event_editor(ev_name: String) -> void:
 					cfg.life = val
 					_store.save_store())
 		if String(cfg.type) == "beam_on":
-			_slider_into(v, "Beam length (px)", 60.0, 1200.0,
+			_int_slider_into(v, "Beam length (px)", 60.0, 1200.0,
 				float(cfg.get("length", 260.0)), func(val: float) -> void:
 					cfg["length"] = val
+					_store.save_store())
+			_toggle_into(v, "Gradual extend (grow from 0 on fire)",
+				bool(cfg.get("gradual", false)), func(val: bool) -> void:
+					cfg["gradual"] = val
+					_store.save_store())
+			_int_slider_into(v, "Extend rate (px/s)", 100.0, 4000.0,
+				float(cfg.get("rate", 1200.0)), func(val: float) -> void:
+					cfg["rate"] = val
 					_store.save_store())
 		if String(cfg.type) == "loop":
 			_int_slider_into(v, "Sheet columns (hframes)", 1.0, 16.0,
@@ -1193,6 +1204,8 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			_beam.offset = Vector2(0, -tex3.get_height() * 0.5)
 			add_child(_beam)
 			_beam_cfg = cfg
+			_beam_len = 0.0 if bool(cfg.get("gradual", false)) \
+				else float(cfg.get("length", 260.0))
 		"beam_off":
 			_beam_off()
 		"loop":
@@ -1268,9 +1281,12 @@ func _update_effects(delta: float) -> void:
 		var dir := _fx_direction(spawn)
 		_beam.global_position = spawn
 		_beam.rotation = dir.angle()
+		_beam_len = minf(
+			_beam_len + float(_beam_cfg.get("rate", 1200.0)) * delta,
+			float(_beam_cfg.get("length", 260.0)))
 		var tex_w := float(_beam.texture.get_width())
 		_beam.scale = Vector2(
-			float(_beam_cfg.get("length", 260.0)) / maxf(tex_w, 1.0),
+			_beam_len / maxf(tex_w, 1.0),
 			float(_beam_cfg.get("scale", 1.0)))
 
 
