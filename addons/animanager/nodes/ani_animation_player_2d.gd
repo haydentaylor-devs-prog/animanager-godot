@@ -339,6 +339,11 @@ var _fade_from_rig: AniRigResource = null
 var _fade_from_frames_by_bone: Dictionary = {}
 var _fade_from_root_baseline: Vector2 = Vector2.ZERO
 var _fade_from_frame: float = 0.0
+# Effective looping of the OUTGOING clip, captured at fade start so
+# loop_override is honored: a one-shot source parked on its final
+# frame must HOLD there through the fade, not wrap to frame 0 and
+# visibly replay its start under the blend (2026-09-27).
+var _fade_from_loops := true
 var _fade_elapsed: float = 0.0
 var _fade_duration: float = 0.0
 
@@ -351,6 +356,8 @@ func crossfade_to(new_rig: AniRigResource, duration: float = 0.18) -> void:
 	if rig != null and new_rig != null and new_rig != rig and duration > 0.0:
 		_fade_from_rig = rig
 		_fade_from_frame = _current_frame
+		_fade_from_loops = (loop_override == 1) or (
+			loop_override == -1 and rig.is_looping)
 		_fade_elapsed = 0.0
 		_fade_duration = duration
 		# Own copy of the outgoing frame index — _rebuild_indices
@@ -598,7 +605,7 @@ func _blended_local(uuid: String, frames: Array, frame: float) -> Dictionary:
 		_fade_from_frames_by_bone.get(uuid, []) as Array,
 		_fade_from_frame,
 		_fade_from_rig.total_frames,
-		_fade_from_rig.is_looping,
+		_fade_from_loops,
 	)
 	return {
 		"rotation": lerp_angle(q.rotation, p.rotation, w),
@@ -700,7 +707,7 @@ func _process(delta: float) -> void:
 	if _fade_from_rig != null:
 		_fade_elapsed += delta
 		_fade_from_frame += delta * float(_fade_from_rig.frame_rate) * speed
-		if _fade_from_rig.is_looping:
+		if _fade_from_loops:
 			_fade_from_frame = fposmod(
 				_fade_from_frame, float(_fade_from_rig.total_frames)
 			)

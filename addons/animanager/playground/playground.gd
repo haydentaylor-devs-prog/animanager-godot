@@ -1728,6 +1728,8 @@ func _release_held_bind() -> void:
 	_loops_off()
 	var idle: String = _char().ingame.idle
 	if not idle.is_empty():
+		# The abandoned clip must not wrap around under the fade.
+		_ani.loop_override = 0
 		_crossfade_to_path(idle)
 
 
@@ -1742,8 +1744,8 @@ func _crossfade_to_path(path: String) -> void:
 	if _ani.rig == null:
 		_activate_rig(path)
 		return
-	_ani.loop_override = 1
 	_ani.crossfade_to(res, _fade_sec())
+	_ani.loop_override = 1
 	_active_rig_path = path
 	_apply_all_domains()
 
@@ -1774,10 +1776,12 @@ func _activate_rig(path: String) -> void:
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
-	_ani.loop_override = 1
 	# Blend into the new clip instead of hard-cutting (crossfade_to
-	# falls back to a cut when there is nothing to fade from).
+	# falls back to a cut when there is nothing to fade from). The
+	# loop override is set AFTER the fade capture, so the OUTGOING
+	# clip keeps its own effective looping through the blend.
 	_ani.crossfade_to(res, _fade_sec())
+	_ani.loop_override = 1
 	_apply_all_domains()
 	_apply_playback()
 	# Auto-play the recorded layering for this base (runtime supports
@@ -2024,6 +2028,10 @@ func _process(delta: float) -> void:
 				_ig_release_pending = false
 				var post_idle: String = _char().ingame.idle
 				if not post_idle.is_empty():
+					# Clamp the finished clip so the fade blends from
+					# its held FINAL pose - looping through frame 0
+					# mid-fade read as the whole clip replaying.
+					_ani.loop_override = 0
 					_crossfade_to_path(post_idle)
 	# In-game static movement: bound direction inputs glide the node
 	# itself - no clip switching, made for flyers with no walk anims.
