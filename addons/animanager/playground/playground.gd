@@ -97,6 +97,7 @@ var _capture_dialog: AcceptDialog
 var _capture_label: Label
 var _capture_rig_path := ""
 var _captured_key := ""
+var _capture_move_dir := ""
 var _held_bind_key := ""
 
 var _dialog_layer: CanvasLayer
@@ -1365,12 +1366,51 @@ func _build_ingame_content() -> void:
 		row.add_child(bind)
 		_content.add_child(row)
 
+	_content.add_child(HSeparator.new())
+	# Flying/static characters have no walk clips - direction binds
+	# glide the node itself, animations untouched (2026-09-26).
+	_toggle_into(_content, "Static movement inputs (flyer glide)",
+		bool(_char().ingame.get("move_enabled", false)),
+		func(v: bool) -> void:
+			_char().ingame.move_enabled = v
+			_store.save_store()
+			_rebuild_content())
+	if bool(_char().ingame.get("move_enabled", false)):
+		var mv: Dictionary = _char().ingame.get("move", {})
+		for dir in ["left", "right", "up", "down"]:
+			var d := String(dir)
+			var mrow := HBoxContainer.new()
+			var ml := Label.new()
+			ml.text = "Move " + d
+			ml.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			ml.add_theme_font_size_override("font_size", FONT)
+			mrow.add_child(ml)
+			var mbind := Button.new()
+			var mkey := String(mv.get(d, ""))
+			mbind.text = mkey if not mkey.is_empty() else "Assign"
+			mbind.custom_minimum_size = Vector2(110, 0)
+			mbind.pressed.connect(func() -> void: _prompt_movebind(d))
+			mrow.add_child(mbind)
+			_content.add_child(mrow)
+
 
 func _prompt_keybind(rig_path: String) -> void:
 	_capture_rig_path = rig_path
+	_capture_move_dir = ""
+	_open_capture(String(_char().ingame.binds.get(rig_path, "")))
+
+
+func _prompt_movebind(dir: String) -> void:
+	_capture_rig_path = ""
+	_capture_move_dir = dir
+	_open_capture(String(
+		(_char().ingame.get("move", {}) as Dictionary).get(dir, "")))
+
+
+func _open_capture(existing: String) -> void:
 	_captured_key = ""
 	_capture_dialog = AcceptDialog.new()
-	_capture_dialog.title = "Press a key or key-combination"
+	_capture_dialog.title = "Press a key - or pick a mouse button below"
 	_capture_dialog.ok_button_text = "Confirm"
 	_capture_label = Label.new()
 	_capture_label.text = "(waiting for input...)"
@@ -1378,22 +1418,47 @@ func _prompt_keybind(rig_path: String) -> void:
 	_capture_label.add_theme_font_size_override("font_size", FONT_HEAD)
 	_capture_dialog.add_child(_capture_label)
 	_capture_dialog.add_cancel_button("Cancel")
-	var existing: String = _char().ingame.binds.get(rig_path, "")
+	# Mouse buttons come from dialog buttons rather than raw click
+	# capture - raw capture would swallow the clicks aimed at
+	# Confirm/Cancel themselves.
+	_capture_dialog.add_button("LMB", false, "mouse1")
+	_capture_dialog.add_button("RMB", false, "mouse2")
+	_capture_dialog.add_button("MMB", false, "mouse3")
 	if not existing.is_empty():
 		_capture_dialog.add_button("Unbind", false, "unbind")
 	_capture_dialog.confirmed.connect(func() -> void:
 		if not _captured_key.is_empty():
-			_char().ingame.binds[_capture_rig_path] = _captured_key
-			_store.save_store()
+			_commit_bind(_captured_key)
 		_close_capture())
 	_capture_dialog.custom_action.connect(func(action: StringName) -> void:
-		if action == "unbind":
-			_char().ingame.binds.erase(_capture_rig_path)
-			_store.save_store()
-		_close_capture())
+		var a := String(action)
+		if a.begins_with("mouse"):
+			_captured_key = "Mouse" + a.substr(5)
+			_capture_label.text = _captured_key
+			return
+		if a == "unbind":
+			_commit_bind("")
+			_close_capture())
 	_capture_dialog.canceled.connect(_close_capture)
 	_dialog_layer.add_child(_capture_dialog)
 	_capture_dialog.popup_centered()
+
+
+## Write the captured bind to whichever slot the dialog was opened
+## for (clip bind or movement direction); empty = unbind.
+func _commit_bind(key: String) -> void:
+	if not _capture_move_dir.is_empty():
+		var mv: Dictionary = _char().ingame.get("move", {})
+		if key.is_empty():
+			mv.erase(_capture_move_dir)
+		else:
+			mv[_capture_move_dir] = key
+		_char().ingame.move = mv
+	elif key.is_empty():
+		_char().ingame.binds.erase(_capture_rig_path)
+	else:
+		_char().ingame.binds[_capture_rig_path] = key
+	_store.save_store()
 
 
 func _close_capture() -> void:
@@ -1404,6 +1469,28 @@ func _close_capture() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and _capture_dialog == null \
+			and _screen == Screen.INGAME and _ani != null \
+			and _ani.rig != null:
+		var mb := event as InputEventMouseButton
+		var over_ui := _work_root != null and _work_root.visible \
+			and _work_root.get_global_rect().has_point(mb.position)
+		var mname := "Mouse%d" % mb.button_index
+		var mbinds: Dictionary = _char().ingame.binds
+		if mb.pressed and not over_ui:
+			for rig_path in mbinds:
+				if mbinds[rig_path] == mname:
+					_held_bind_key = mname
+					_crossfade_to_path(rig_path)
+					return
+		elif not mb.pressed and _held_bind_key == mname:
+			# Releases count even over the panel, so a clip can't
+			# stick on after a drag onto the UI.
+			_held_bind_key = ""
+			var midle: String = _char().ingame.idle
+			if not midle.is_empty():
+				_crossfade_to_path(midle)
+		return
 	if not event is InputEventKey:
 		return
 	var key_event := event as InputEventKey
@@ -1438,6 +1525,20 @@ func _input(event: InputEvent) -> void:
 			var idle: String = _char().ingame.idle
 			if not idle.is_empty():
 				_crossfade_to_path(idle)
+
+
+## Is the named bind currently held? Handles "Mouse<n>" and plain
+## keys; a modifier combo polls its final key (movement binds are
+## expected to be plain keys).
+func _bind_down(bind_name: String) -> bool:
+	if bind_name.is_empty():
+		return false
+	if bind_name.begins_with("Mouse"):
+		return Input.is_mouse_button_pressed(
+			int(bind_name.substr(5)) as MouseButton)
+	var plain := bind_name.get_slice(
+		"+", bind_name.get_slice_count("+") - 1)
+	return Input.is_key_pressed(OS.find_keycode_from_string(plain))
 
 
 func _crossfade_to_path(path: String) -> void:
@@ -1691,6 +1792,24 @@ func _process(delta: float) -> void:
 							held.play())
 			# secs < 0: hold forever - release with the button, the
 			# hold-frame slider, or by switching rigs.
+	# In-game static movement: bound direction inputs glide the node
+	# itself - no clip switching, made for flyers with no walk anims.
+	if _screen == Screen.INGAME and not _char_id.is_empty() \
+			and bool(_char().ingame.get("move_enabled", false)) \
+			and _capture_dialog == null:
+		var mvb: Dictionary = _char().ingame.get("move", {})
+		var dv := Vector2.ZERO
+		if _bind_down(String(mvb.get("left", ""))):
+			dv.x -= 1.0
+		if _bind_down(String(mvb.get("right", ""))):
+			dv.x += 1.0
+		if _bind_down(String(mvb.get("up", ""))):
+			dv.y -= 1.0
+		if _bind_down(String(mvb.get("down", ""))):
+			dv.y += 1.0
+		if dv != Vector2.ZERO:
+			_ani.position += dv.normalized() \
+				* (DRAG_MAX_DEFLECT * DRAG_SPEED_PER_PX) * delta
 	# Cursor aim.
 	if _aim_enabled and _ani.rig != null and _aim_bone_pick != null \
 			and _aim_bone_pick.selected >= 0:
