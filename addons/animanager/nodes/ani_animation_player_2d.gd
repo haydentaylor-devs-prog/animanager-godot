@@ -577,6 +577,9 @@ func _local_for_bone(uuid: String, frames: Array, frame: float) -> Dictionary:
 	if _layer_weight >= 1.0:
 		return ov
 	var w := _layer_weight
+	var mix := _ik_mix(base.ik_target_x, ov.ik_target_x, w)
+	if is_nan(ov.ik_target_x) and not is_nan(base.ik_target_x):
+		mix *= float(base.get("ik_mix", 1.0))
 	return {
 		"rotation": lerp_angle(base.rotation, ov.rotation, w),
 		"translate_x": lerpf(base.translate_x, ov.translate_x, w),
@@ -585,6 +588,7 @@ func _local_for_bone(uuid: String, frames: Array, frame: float) -> Dictionary:
 		"scale_y": lerpf(base.scale_y, ov.scale_y, w),
 		"ik_target_x": _lerp_ik(base.ik_target_x, ov.ik_target_x, w),
 		"ik_target_y": _lerp_ik(base.ik_target_y, ov.ik_target_y, w),
+		"ik_mix": mix,
 	}
 
 
@@ -615,7 +619,24 @@ func _blended_local(uuid: String, frames: Array, frame: float) -> Dictionary:
 		"scale_y": lerpf(q.scale_y, p.scale_y, w),
 		"ik_target_x": _lerp_ik(q.ik_target_x, p.ik_target_x, w),
 		"ik_target_y": _lerp_ik(q.ik_target_y, p.ik_target_y, w),
+		"ik_mix": _ik_mix(q.ik_target_x, p.ik_target_x, w),
 	}
+
+
+# How strongly a blended per-frame IK target overrides the chain's
+# REST target. 1.0 when both blend sides key the target (the targets
+# themselves lerp); ramps with the blend weight when only ONE side
+# keys it. The unkeyed side renders its chain toward the rest target,
+# so without the ramp a fade held the keyed target at full strength
+# and the arm SNAPPED to the rest pose the moment the fade completed
+# (Seraph's staff hand jumping on every attack-to-idle transition,
+# 2026-09-27).
+func _ik_mix(qx: float, px: float, w: float) -> float:
+	if is_nan(qx) and not is_nan(px):
+		return w
+	if not is_nan(qx) and is_nan(px):
+		return 1.0 - w
+	return 1.0
 
 
 # NAN = "no IK target on this side" — take the defined side rather
@@ -1396,10 +1417,16 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 			var target := Vector2(float(chain.target_x), float(chain.target_y))
 			var leaf_frames: Array = _frames_by_bone.get(chain_child, [])
 			var interp := _local_for_bone(chain_child, leaf_frames, frame)
+			# ik_mix < 1 while a cross-fade/layer blends against a
+			# side with no per-frame target: the effective target
+			# slides between the rest target (what that side renders)
+			# and the keyed one, so the chain tracks a moving target
+			# instead of snapping when the blend resolves.
+			var ik_mix: float = float(interp.get("ik_mix", 1.0))
 			if not is_nan(interp.ik_target_x):
-				target.x = interp.ik_target_x
+				target.x = lerpf(target.x, float(interp.ik_target_x), ik_mix)
 			if not is_nan(interp.ik_target_y):
-				target.y = interp.ik_target_y
+				target.y = lerpf(target.y, float(interp.ik_target_y), ik_mix)
 			target += _root_translate
 			var pole_side: int = int(chain.get("pole_side", 1))
 			var rotations: Vector2 = AniPoseEvaluator.solve_two_bone_ik(
