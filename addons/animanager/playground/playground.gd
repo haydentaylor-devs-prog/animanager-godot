@@ -878,23 +878,33 @@ func _build_physics_menu() -> void:
 	var p := _domain_target("physics")
 	_toggle_into(_content, "Physics enabled", bool(p.enabled),
 		func(v: bool) -> void: _domain_edit("physics", "enabled", v))
+	# Collapsible per-class sub-sections (2026-09-27): the flat list
+	# made it too easy to grab a Hair slider while aiming for Cloth.
+	var cloth_box := _collapsible(_content, "Cloth", true)
 	for spec in [
-		["Cloth stiffness", "c_st", 0.01, 0.6], ["Cloth damping", "c_da", 0.0, 0.9],
-		["Cloth inertia", "c_in", 0.0, 4.0],
-		["Hair stiffness", "h_st", 0.01, 1.0], ["Hair damping", "h_da", 0.0, 0.9],
-		["Hair inertia", "h_in", 0.0, 4.0],
+		["Stiffness", "c_st", 0.01, 0.6], ["Damping", "c_da", 0.0, 0.9],
+		["Inertia", "c_in", 0.0, 4.0],
 	]:
 		var key: String = spec[1]
-		_slider_into(_content, spec[0], spec[2], spec[3], float(p[key]),
+		_slider_into(cloth_box, spec[0], spec[2], spec[3], float(p[key]),
 			func(v: float) -> void: _domain_edit("physics", key, v))
-	_toggle_into(_content, "Limb sway (flyer legs)", bool(p.limbs),
+	var hair_box := _collapsible(_content, "Hair", true)
+	for spec in [
+		["Stiffness", "h_st", 0.01, 1.0], ["Damping", "h_da", 0.0, 0.9],
+		["Inertia", "h_in", 0.0, 4.0],
+	]:
+		var key: String = spec[1]
+		_slider_into(hair_box, spec[0], spec[2], spec[3], float(p[key]),
+			func(v: float) -> void: _domain_edit("physics", key, v))
+	var limb_box := _collapsible(_content, "Limbs", true)
+	_toggle_into(limb_box, "Limb sway (flyer legs)", bool(p.limbs),
 		func(v: bool) -> void: _domain_edit("physics", "limbs", v))
 	for spec in [
-		["Limb stiffness", "l_st", 0.01, 1.0], ["Limb damping", "l_da", 0.0, 0.9],
-		["Limb inertia", "l_in", 0.0, 4.0],
+		["Stiffness", "l_st", 0.01, 1.0], ["Damping", "l_da", 0.0, 0.9],
+		["Inertia", "l_in", 0.0, 4.0],
 	]:
 		var key: String = spec[1]
-		_slider_into(_content, spec[0], spec[2], spec[3], float(p[key]),
+		_slider_into(limb_box, spec[0], spec[2], spec[3], float(p[key]),
 			func(v: float) -> void: _domain_edit("physics", key, v))
 	_btn_into(_content, "Reset physics to defaults", func() -> void:
 		var t := _domain_target("physics")
