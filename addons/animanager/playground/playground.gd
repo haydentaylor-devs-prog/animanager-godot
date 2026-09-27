@@ -1879,11 +1879,16 @@ func _process(delta: float) -> void:
 		if not _held_bind_key.is_empty() and not _ig_parked and at_hold and _ani.is_playing():
 			_ani.pause()
 			_ig_parked = true
-		elif _ig_release_pending and _ani.is_playing() and not at_hold:
-			_ig_release_pending = false
-			var post_idle: String = _char().ingame.idle
-			if not post_idle.is_empty():
-				_crossfade_to_path(post_idle)
+		elif _ig_release_pending and _ani.is_playing():
+			# Play the authored return-to-idle tail out in full; only
+			# the LAST frame hands off to the idle crossfade. Fading
+			# out one frame past the hold skipped the return arc and
+			# made the staff jump across the chest (2026-09-27).
+			if int(_ani.get_current_frame()) >= _ani.rig.total_frames - 1:
+				_ig_release_pending = false
+				var post_idle: String = _char().ingame.idle
+				if not post_idle.is_empty():
+					_crossfade_to_path(post_idle)
 	# In-game static movement: bound direction inputs glide the node
 	# itself - no clip switching, made for flyers with no walk anims.
 	if _screen == Screen.INGAME and not _char_id.is_empty() \
