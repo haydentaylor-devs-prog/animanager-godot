@@ -58,6 +58,7 @@ var _layer: CanvasLayer
 var _menu_root: Control
 var _work_root: Control
 var _panel_tab: Button
+var _save_btn: Button
 var _panel_collapsed := false
 var _content: VBoxContainer  # swapped area (home / submenus / advanced)
 var _char_list_box: VBoxContainer
@@ -272,6 +273,8 @@ func _show_menu() -> void:
 		_work_root.visible = false
 	if _panel_tab != null:
 		_panel_tab.visible = false
+	if _save_btn != null:
+		_save_btn.visible = false
 	if _ani != null:
 		_ani.queue_free()
 		_ani = null
@@ -315,6 +318,7 @@ func _enter_character(id: String) -> void:
 	if _work_root == null:
 		_build_workspace()
 	_panel_tab.visible = true
+	_save_btn.visible = true
 	_apply_panel_state()
 	if _joy == null:
 		_joy = VirtualJoystick.new()
@@ -359,6 +363,23 @@ func _build_workspace() -> void:
 		_panel_collapsed = not _panel_collapsed
 		_apply_panel_state())
 	_layer.add_child(_panel_tab)
+
+	# One-click preset save at the play area's top-right corner.
+	_save_btn = Button.new()
+	_save_btn.text = "Save"
+	_save_btn.tooltip_text = "Overwrite current preset"
+	_save_btn.add_theme_font_size_override("font_size", 18)
+	_save_btn.anchor_left = 1.0
+	_save_btn.anchor_right = 1.0
+	_save_btn.offset_top = 8
+	_save_btn.offset_bottom = 48
+	_save_btn.pressed.connect(func() -> void:
+		_overwrite_current_preset()
+		_save_btn.text = "Saved"
+		get_tree().create_timer(0.6).timeout.connect(func() -> void:
+			if is_instance_valid(_save_btn):
+				_save_btn.text = "Save"))
+	_layer.add_child(_save_btn)
 	_apply_panel_state()
 
 	# Frame readout, top-left of the play area (Playback toggle).
@@ -486,13 +507,7 @@ func _build_presets_section(parent: VBoxContainer) -> void:
 		_char().current_preset = n
 		_store.save_store()
 		_refresh_presets())
-	_btn_into(box, "Overwrite current preset", func() -> void:
-		if _preset_pick.selected < 0:
-			return
-		var n := _preset_pick.get_item_text(_preset_pick.selected)
-		_char().presets[n] = _store.snapshot(_char_id)
-		_char().current_preset = n
-		_store.save_store())
+	_btn_into(box, "Overwrite current preset", _overwrite_current_preset)
 	_preset_pick = OptionButton.new()
 	box.add_child(_preset_pick)
 	_btn_into(box, "Load selected", func() -> void:
@@ -536,6 +551,16 @@ func _build_presets_section(parent: VBoxContainer) -> void:
 		conf.canceled.connect(func() -> void: conf.queue_free())
 		_dialog_layer.add_child(conf)
 		conf.popup_centered())
+
+
+func _overwrite_current_preset() -> void:
+	if _preset_pick == null or _preset_pick.selected < 0 \
+			or _char_id.is_empty():
+		return
+	var n := _preset_pick.get_item_text(_preset_pick.selected)
+	_char().presets[n] = _store.snapshot(_char_id)
+	_char().current_preset = n
+	_store.save_store()
 
 
 func _refresh_presets() -> void:
@@ -1789,6 +1814,12 @@ func _apply_domain(domain: String) -> void:
 					steady_bone,
 					deg_to_rad(float(t.get("steady_deg", 0.0))),
 					1.0 if bool(t.get("steady", false)) else 0.0)
+				# The rig setter cleared bone aims and already
+				# evaluated a pose WITHOUT the steady lock - without
+				# this re-evaluation that unpinned pose renders for
+				# one frame on every clip switch (the staff flicked
+				# ~15 deg at the end of the beam attack, 2026-09-27).
+				_ani.set_current_frame(_ani.get_current_frame())
 
 
 func _apply_weapon(w: Dictionary) -> void:
@@ -1907,6 +1938,9 @@ func _apply_panel_state() -> void:
 	var edge := 0.0 if _panel_collapsed else -PANEL_W
 	_panel_tab.offset_right = edge
 	_panel_tab.offset_left = edge - PANEL_TAB_W
+	if _save_btn != null:
+		_save_btn.offset_right = edge - 8.0
+		_save_btn.offset_left = edge - 76.0
 	if _ani != null:
 		_recenter()
 
