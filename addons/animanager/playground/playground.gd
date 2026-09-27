@@ -104,6 +104,8 @@ var _ig_release_pending := false
 # In-game per-animation release policy editor (open rig path).
 var _release_edit_path := ""
 var _anim_aim_bone := ""
+var _events_editor_built := false
+var _scrub_box: HBoxContainer
 var _show_frames_check: CheckBox
 var _frame_readout: Label
 var _fade_slider: HSlider
@@ -133,6 +135,9 @@ func _ready() -> void:
 	# frame's pose evaluation left them one frame behind - a visible
 	# pixel jitter against slow motion like an idle bob (2026-09-26).
 	process_priority = 100
+	# Window close asks about saving the preset first (see
+	# _notification) instead of quitting outright.
+	get_tree().auto_accept_quit = false
 	# The playground drives every transform in _process (no physics),
 	# but a consuming project may enable physics_interpolation
 	# globally (angel-squadron does, for its HD-2D demo). Interpolating
@@ -169,7 +174,28 @@ func _ready() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		_store.save_store()
-		get_tree().quit()
+		# On the character-select menu (or with no preset picked)
+		# there is nothing to prompt about.
+		if _char_id.is_empty() or _preset_pick == null \
+				or _preset_pick.selected < 0:
+			get_tree().quit()
+			return
+		var n := _preset_pick.get_item_text(_preset_pick.selected)
+		var d := ConfirmationDialog.new()
+		d.title = "Save before exiting?"
+		d.dialog_text = "Overwrite preset '%s' with the current session?" % n
+		d.ok_button_text = "Save & Exit"
+		d.add_button("Exit Without Saving", false, "nosave")
+		d.get_cancel_button().text = "Keep Playing"
+		d.confirmed.connect(func() -> void:
+			_overwrite_current_preset()
+			get_tree().quit())
+		d.custom_action.connect(func(a: StringName) -> void:
+			if a == "nosave":
+				get_tree().quit())
+		d.canceled.connect(func() -> void: d.queue_free())
+		_dialog_layer.add_child(d)
+		d.popup_centered()
 
 
 func _env_boot(rig_path: String) -> void:
@@ -276,6 +302,8 @@ func _show_menu() -> void:
 		_panel_tab.visible = false
 	if _save_btn != null:
 		_save_btn.visible = false
+	if _scrub_box != null:
+		_scrub_box.visible = false
 	if _ani != null:
 		_ani.queue_free()
 		_ani = null
@@ -320,6 +348,7 @@ func _enter_character(id: String) -> void:
 		_build_workspace()
 	_panel_tab.visible = true
 	_save_btn.visible = true
+	_scrub_box.visible = true
 	_apply_panel_state()
 	if _joy == null:
 		_joy = VirtualJoystick.new()
@@ -389,6 +418,35 @@ func _build_workspace() -> void:
 	_frame_readout.position = Vector2(16, 12)
 	_frame_readout.visible = false
 	_layer.add_child(_frame_readout)
+
+	# Scrub row: pause / play / step one frame - frame-accurate
+	# inspection without per-frame documentation (2026-09-27).
+	_scrub_box = HBoxContainer.new()
+	_scrub_box.position = Vector2(16, 40)
+	_scrub_box.add_theme_constant_override("separation", 6)
+	_scrub_box.visible = false
+	for spec in [
+		["Pause", func() -> void:
+			if _ani != null:
+				_ani.pause()],
+		["Play", func() -> void:
+			if _ani != null:
+				_ani.play()],
+		["+1 Frame", func() -> void:
+			if _ani == null or _ani.rig == null:
+				return
+			_ani.pause()
+			var nf := int(_ani.get_current_frame()) + 1
+			if nf >= _ani.rig.total_frames:
+				nf = 0
+			_ani.set_current_frame(float(nf))],
+	]:
+		var sb := Button.new()
+		sb.text = String(spec[0])
+		sb.add_theme_font_size_override("font_size", 12)
+		sb.pressed.connect(spec[1])
+		_scrub_box.add_child(sb)
+	_layer.add_child(_scrub_box)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -976,6 +1034,30 @@ func _build_weapon_menu() -> void:
 		bool(w.get("behind", false)), func(v: bool) -> void:
 			_domain_edit("weapon", "behind", v)
 			_apply_weapon_layer())
+	# Exact layering (2026-09-27): slot the weapon's z directly
+	# against one part (e.g. just behind the right hand) instead of
+	# the all-or-nothing behind/front toggle. Follows animated part
+	# sort orders per frame. Shaded mode only - unshaded rendering
+	# draws all parts in one canvas item, so the simple toggle
+	# stays the fallback.
+	_caption_into(_content, "Layer weapon against a part:")
+	var lay_pick := OptionButton.new()
+	lay_pick.add_item("(simple behind/front)")
+	if _ani != null and _ani.rig != null:
+		for bone in _ani.rig.bones:
+			lay_pick.add_item(String(bone.name))
+	for i in range(lay_pick.item_count):
+		if i > 0 and lay_pick.get_item_text(i) == String(w.get("behind_bone", "")):
+			lay_pick.select(i)
+	lay_pick.item_selected.connect(func(i: int) -> void:
+		_domain_edit("weapon", "behind_bone",
+			"" if i == 0 else lay_pick.get_item_text(i))
+		_apply_weapon_layer())
+	_content.add_child(lay_pick)
+	_toggle_into(_content, "In front of that part (instead of behind)",
+		bool(w.get("layer_front", false)), func(v: bool) -> void:
+			_domain_edit("weapon", "layer_front", v)
+			_apply_weapon_layer())
 	# Crossfades blend each bone's LOCAL rotation, so the hand's
 	# composed WORLD rotation can swing through a wide transient arc
 	# even when both clips hold the staff upright - seen as the staff
@@ -1116,22 +1198,57 @@ func _build_events_menu() -> void:
 	intro.modulate = Color(0.7, 0.7, 0.7)
 	_content.add_child(intro)
 	var bindings: Dictionary = _char().get("events", {})
-	for n in names:
-		var ev_name: String = n
-		var cfg: Variant = bindings.get(ev_name)
-		var b := Button.new()
-		var summary := "unbound" if not cfg is Dictionary \
-			else String(cfg.get("type", "?")) + " · " + String(cfg.get("file", ""))
-		b.text = "%s  —  %s" % [ev_name, summary]
-		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		b.add_theme_font_size_override("font_size", FONT)
-		b.modulate = Color(0.5, 0.9, 0.5) if cfg is Dictionary else Color.WHITE
-		b.pressed.connect(func() -> void:
-			_events_expanded = "" if _events_expanded == ev_name else ev_name
-			_show_submenu("events"))
-		_content.add_child(b)
-		if _events_expanded == ev_name:
-			_build_event_editor(ev_name)
+	# Grouped per animation with the frame each event sits on
+	# (2026-09-27) - a flat name list said nothing about where or
+	# when an event fires. An event named in several clips lists
+	# under each; bindings stay keyed by NAME so one binding serves
+	# them all. Orphan bindings (event renamed away) list last.
+	_events_editor_built = false
+	var seen := {}
+	for r in _char().rigs:
+		var res := _load_rig_res(String(r.path))
+		if res == null or (res.events as Array).is_empty():
+			continue
+		_caption_into(_content, String(r.name) + ":")
+		var evs: Array = (res.events as Array).duplicate()
+		evs.sort_custom(func(a, b) -> bool:
+			return int(a.get("frame", 0)) < int(b.get("frame", 0)))
+		for ev in evs:
+			var ev_name := String(ev.get("name", ""))
+			if ev_name.is_empty():
+				continue
+			seen[ev_name] = true
+			_add_event_row(ev_name, int(ev.get("frame", 0)), bindings)
+	var orphans := []
+	for n in bindings:
+		if not seen.has(n):
+			orphans.append(String(n))
+	if not orphans.is_empty():
+		orphans.sort()
+		_caption_into(_content, "Bindings with no matching event:")
+		for n2 in orphans:
+			_add_event_row(String(n2), -1, bindings)
+
+
+func _add_event_row(ev_name: String, frame: int, bindings: Dictionary) -> void:
+	var cfg: Variant = bindings.get(ev_name)
+	var b := Button.new()
+	var summary := "unbound" if not cfg is Dictionary \
+		else String(cfg.get("type", "?")) + " · " + String(cfg.get("file", ""))
+	var frame_txt := "  (frame %d)" % frame if frame >= 0 else ""
+	b.text = "%s%s  —  %s" % [ev_name, frame_txt, summary]
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.add_theme_font_size_override("font_size", FONT)
+	b.modulate = Color(0.5, 0.9, 0.5) if cfg is Dictionary else Color.WHITE
+	b.pressed.connect(func() -> void:
+		_events_expanded = "" if _events_expanded == ev_name else ev_name
+		_show_submenu("events"))
+	_content.add_child(b)
+	# The same event can list under several animations - build the
+	# editor only once, under the first listed row.
+	if _events_expanded == ev_name and not _events_editor_built:
+		_events_editor_built = true
+		_build_event_editor(ev_name)
 
 
 func _event_cfg(ev_name: String) -> Dictionary:
@@ -1260,9 +1377,13 @@ func _build_event_editor(ev_name: String) -> void:
 				float(cfg.get("rate", 1200.0)), func(val: float) -> void:
 					cfg["rate"] = val
 					_store.save_store())
-		if String(cfg.type) == "loop":
+		if String(cfg.type) in ["loop", "projectile"]:
+			# Projectiles default to 1 column (a plain single image);
+			# loops default to 4 - untouched old bindings keep their
+			# behavior either way.
+			var sheet_default := 4 if String(cfg.type) == "loop" else 1
 			_int_slider_into(v, "Sheet columns (hframes)", 1.0, 16.0,
-				float(cfg.get("hframes", 4)), func(val: float) -> void:
+				float(cfg.get("hframes", sheet_default)), func(val: float) -> void:
 					cfg["hframes"] = int(roundf(val))
 					_store.save_store())
 			_int_slider_into(v, "Sheet rows (vframes)", 1.0, 8.0,
@@ -1273,6 +1394,7 @@ func _build_event_editor(ev_name: String) -> void:
 				float(cfg.get("fps", 10.0)), func(val: float) -> void:
 					cfg["fps"] = val
 					_store.save_store())
+		if String(cfg.type) == "loop":
 			_caption_into(v, "Stop loop on event:")
 			var stop_pick := OptionButton.new()
 			stop_pick.add_item("(no stop event)")
@@ -1342,6 +1464,11 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			var sp := Sprite2D.new()
 			_crispify(sp)
 			sp.texture = tex
+			# Sheet-aware (2026-09-27): hframes/vframes > 1 flip the
+			# projectile through its frames while it travels, instead
+			# of drawing the whole strip at once.
+			sp.hframes = maxi(1, int(cfg.get("hframes", 1)))
+			sp.vframes = maxi(1, int(cfg.get("vframes", 1)))
 			sp.global_position = spawn
 			var dir := _fx_direction(spawn)
 			sp.rotation = dir.angle()
@@ -1349,7 +1476,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			add_child(sp)
 			_projectiles.append({
 				"node": sp, "vel": dir * float(cfg.speed),
-				"ttl": float(cfg.life),
+				"ttl": float(cfg.life), "cfg": cfg, "t": 0.0,
 			})
 		"burst":
 			var tex2: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
@@ -1433,6 +1560,13 @@ func _update_effects(delta: float) -> void:
 				(pr.node as Node).queue_free()
 			continue
 		(pr.node as Sprite2D).global_position += (pr.vel as Vector2) * delta
+		pr["t"] = float(pr.get("t", 0.0)) + delta
+		var pcfg: Dictionary = pr.get("cfg", {})
+		var ptotal := maxi(1, int(pcfg.get("hframes", 1))) \
+			* maxi(1, int(pcfg.get("vframes", 1)))
+		if ptotal > 1:
+			(pr.node as Sprite2D).frame = \
+				int(float(pr["t"]) * float(pcfg.get("fps", 10.0))) % ptotal
 		alive.append(pr)
 	_projectiles = alive
 	# Anchored loops: follow their bone anchor + flip through frames.
@@ -1891,11 +2025,34 @@ func _apply_weapon(w: Dictionary) -> void:
 	_apply_weapon_layer()
 
 
+## z of the shaded child sprite for [bone_name]; a sentinel when the
+## bone has no shaded child (unshaded mode / bad name).
+func _weapon_part_z(bone_name: String) -> int:
+	if _ani == null:
+		return -100000
+	for uuid in _ani._bone_by_uuid:
+		var bn := String((_ani._bone_by_uuid[uuid] as Dictionary).get("name", ""))
+		if bn == bone_name:
+			var sp: Variant = _ani._shaded_sprites.get(uuid)
+			if sp != null and is_instance_valid(sp):
+				return (sp as Sprite2D).z_index
+			return -100000
+	return -100000
+
+
 func _apply_weapon_layer() -> void:
 	if _weapon == null:
 		return
 	var w := _store.effective(_char_id, _active_rig_path, "weapon")
 	_weapon.z_as_relative = true
+	var bb := String(w.get("behind_bone", ""))
+	if not bb.is_empty():
+		var pz := _weapon_part_z(bb)
+		if pz > -100000:
+			_weapon.show_behind_parent = false
+			_weapon.z_index = pz + \
+				(1 if bool(w.get("layer_front", false)) else -1)
+			return
 	_weapon.z_index = -100 if bool(w.get("behind", false)) else 100
 	_weapon.show_behind_parent = bool(w.get("behind", false))
 
@@ -2145,6 +2302,10 @@ func _process(delta: float) -> void:
 		_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
 		_weapon.rotation = t.get_rotation() + float(w.get("rot", 0))
 		_weapon.scale = Vector2(float(w.get("scale", 1)), float(w.get("scale", 1)))
+		# Part sort orders can be ANIMATED - keep the part-relative
+		# weapon z in step with them.
+		if not String(w.get("behind_bone", "")).is_empty():
+			_apply_weapon_layer()
 	_update_effects(delta)
 	_update_readout()
 
