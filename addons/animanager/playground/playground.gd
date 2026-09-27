@@ -995,6 +995,7 @@ func _build_event_editor(ev_name: String) -> void:
 	box.add_child(v)
 	_content.add_child(box)
 
+	_caption_into(v, "Effect type:")
 	var type_pick := OptionButton.new()
 	for t in ["projectile", "burst", "beam_on", "beam_off", "loop", "none"]:
 		type_pick.add_item(t)
@@ -1008,6 +1009,7 @@ func _build_event_editor(ev_name: String) -> void:
 	v.add_child(type_pick)
 
 	if String(cfg.type) != "beam_off" and String(cfg.type) != "none":
+		_caption_into(v, "Effect image (assets/vfx):")
 		var file_pick := OptionButton.new()
 		for f in _vfx_files():
 			file_pick.add_item(String(f))
@@ -1032,6 +1034,7 @@ func _build_event_editor(ev_name: String) -> void:
 			_store.save_store())
 		v.add_child(file_pick)
 
+		_caption_into(v, "Anchor bone:")
 		var bone_pick := OptionButton.new()
 		_fill_bone_pick(bone_pick, "hand")
 		var bone_matched := false
@@ -1089,6 +1092,7 @@ func _build_event_editor(ev_name: String) -> void:
 				float(cfg.get("fps", 10.0)), func(val: float) -> void:
 					cfg["fps"] = val
 					_store.save_store())
+			_caption_into(v, "Stop loop on event:")
 			var stop_pick := OptionButton.new()
 			stop_pick.add_item("(no stop event)")
 			for other in _discover_event_names():
@@ -1766,6 +1770,17 @@ func _toggle_into(
 	c.toggled.connect(on_change)
 	parent.add_child(c)
 	return c
+
+
+## Small caption above a control (dropdowns show only their current
+## selection - without a caption, a picked value says nothing about
+## what the control IS).
+func _caption_into(parent: Container, text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", FONT - 2)
+	l.modulate = Color(1, 1, 1, 0.7)
+	parent.add_child(l)
 
 
 func _btn_into(parent: Container, text: String, on_press: Callable) -> void:
