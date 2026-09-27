@@ -287,6 +287,12 @@ func _enter_character(id: String) -> void:
 	_screen = Screen.SANDBOX
 	_active_rig_path = ""
 	_menu_root.visible = false
+	# Opening a character resumes its last loaded/saved preset — the
+	# working session between visits is the preset, so tweaks NOT
+	# saved on return (the "No" choice) are discarded here by design.
+	var cur := String(_char().get("current_preset", ""))
+	if not cur.is_empty() and (_char().presets as Dictionary).has(cur):
+		_store.apply_snapshot(id, _char().presets[cur])
 
 	_ani = AniAnimationPlayer2D.new()
 	_ani.zero_root_translate = true
@@ -302,10 +308,10 @@ func _enter_character(id: String) -> void:
 		_joy = VirtualJoystick.new()
 		_joy.anchor_top = 1.0
 		_joy.anchor_bottom = 1.0
-		_joy.offset_left = 24
-		_joy.offset_right = 194
-		_joy.offset_top = -194
-		_joy.offset_bottom = -24
+		_joy.offset_left = 48
+		_joy.offset_right = 218
+		_joy.offset_top = -218
+		_joy.offset_bottom = -48
 		_layer.add_child(_joy)
 	_joy.visible = true
 
