@@ -24,7 +24,10 @@ const Store := preload("res://addons/animanager/playground/playground_store.gd")
 
 enum Screen { MENU, SANDBOX, INGAME }
 
-const PANEL_W := 400.0
+# 560 fits the widest rows (rig 1x5, event editors) without the
+# horizontal scrolling the old 400 forced (2026-09-26).
+const PANEL_W := 560.0
+const PANEL_TAB_W := 28.0
 const FONT := 14
 const FONT_HEAD := 17
 const DRAG_SPEED_PER_PX := 3.0
@@ -54,6 +57,8 @@ var _base_pos: Vector2
 var _layer: CanvasLayer
 var _menu_root: Control
 var _work_root: Control
+var _panel_tab: Button
+var _panel_collapsed := false
 var _content: VBoxContainer  # swapped area (home / submenu / ingame)
 var _char_list_box: VBoxContainer
 var _name_label: Label
@@ -258,6 +263,8 @@ func _show_menu() -> void:
 	_menu_root.visible = true
 	if _work_root != null:
 		_work_root.visible = false
+	if _panel_tab != null:
+		_panel_tab.visible = false
 	if _ani != null:
 		_ani.queue_free()
 		_ani = null
@@ -289,7 +296,8 @@ func _enter_character(id: String) -> void:
 
 	if _work_root == null:
 		_build_workspace()
-	_work_root.visible = true
+	_panel_tab.visible = true
+	_apply_panel_state()
 	if _joy == null:
 		_joy = VirtualJoystick.new()
 		_joy.anchor_top = 1.0
@@ -320,9 +328,26 @@ func _build_workspace() -> void:
 	_work_root.offset_left = -PANEL_W
 	_layer.add_child(_work_root)
 
+	# Edge tab: sticks out of the panel's left edge and collapses the
+	# whole panel into the right side of the screen (and back).
+	_panel_tab = Button.new()
+	_panel_tab.tooltip_text = "Collapse / expand the settings panel"
+	_panel_tab.anchor_left = 1.0
+	_panel_tab.anchor_right = 1.0
+	_panel_tab.anchor_top = 0.5
+	_panel_tab.anchor_bottom = 0.5
+	_panel_tab.offset_top = -45
+	_panel_tab.offset_bottom = 45
+	_panel_tab.pressed.connect(func() -> void:
+		_panel_collapsed = not _panel_collapsed
+		_apply_panel_state())
+	_layer.add_child(_panel_tab)
+	_apply_panel_state()
+
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_work_root.add_child(scroll)
 	var v := VBoxContainer.new()
 	v.custom_minimum_size = Vector2(PANEL_W - 20, 0)
@@ -1602,9 +1627,20 @@ func _fill_bone_pick(pick: OptionButton, prefer: String) -> void:
 
 # ── Frame loop ─────────────────────────────────────────────────────
 
+func _apply_panel_state() -> void:
+	_work_root.visible = not _panel_collapsed
+	_panel_tab.text = "\u25c0" if _panel_collapsed else "\u25b6"
+	var edge := 0.0 if _panel_collapsed else -PANEL_W
+	_panel_tab.offset_right = edge
+	_panel_tab.offset_left = edge - PANEL_TAB_W
+	if _ani != null:
+		_recenter()
+
+
 func _recenter() -> void:
 	var vp := get_viewport_rect().size
-	_base_pos = Vector2((vp.x - PANEL_W) * 0.45, vp.y * 0.55)
+	var pw := 0.0 if _panel_collapsed else PANEL_W
+	_base_pos = Vector2((vp.x - pw) * 0.45, vp.y * 0.55)
 	if _ani != null:
 		_ani.position = _base_pos
 
