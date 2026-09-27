@@ -103,6 +103,10 @@ var _held_bind_key := ""
 # release resumes and then idles once the release events fired.
 var _ig_parked := false
 var _ig_release_pending := false
+# In-game per-animation release policy editor (open rig path).
+var _release_edit_path := ""
+var _show_frames_check: CheckBox
+var _frame_readout: Label
 
 var _dialog_layer: CanvasLayer
 
@@ -282,6 +286,8 @@ func _show_menu() -> void:
 	_projectiles = []
 	if _joy != null:
 		_joy.visible = false
+	if _frame_readout != null:
+		_frame_readout.visible = false
 	_refresh_char_list()
 
 
@@ -291,6 +297,7 @@ func _enter_character(id: String) -> void:
 	_char_id = id
 	_screen = Screen.SANDBOX
 	_active_rig_path = ""
+	_release_edit_path = ""
 	_menu_root.visible = false
 	# Opening a character resumes its last loaded/saved preset — the
 	# working session between visits is the preset, so tweaks NOT
@@ -354,6 +361,13 @@ func _build_workspace() -> void:
 		_apply_panel_state())
 	_layer.add_child(_panel_tab)
 	_apply_panel_state()
+
+	# Frame readout, top-left of the play area (Playback toggle).
+	_frame_readout = Label.new()
+	_frame_readout.add_theme_font_size_override("font_size", FONT)
+	_frame_readout.position = Vector2(16, 12)
+	_frame_readout.visible = false
+	_layer.add_child(_frame_readout)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -530,9 +544,32 @@ func _build_presets_section(parent: VBoxContainer) -> void:
 	_btn_into(box, "Delete selected", func() -> void:
 		if _preset_pick.selected < 0:
 			return
-		_char().presets.erase(_preset_pick.get_item_text(_preset_pick.selected))
-		_store.save_store()
-		_refresh_presets())
+		var n := _preset_pick.get_item_text(_preset_pick.selected)
+		if (_char().presets as Dictionary).size() <= 1:
+			var info := AcceptDialog.new()
+			info.title = "Presets"
+			info.dialog_text = "Cannot delete the only preset."
+			info.confirmed.connect(func() -> void: info.queue_free())
+			info.canceled.connect(func() -> void: info.queue_free())
+			_dialog_layer.add_child(info)
+			info.popup_centered()
+			return
+		var conf := ConfirmationDialog.new()
+		conf.title = "Delete preset"
+		conf.dialog_text = "Delete preset '%s'? This cannot be undone." % n
+		conf.confirmed.connect(func() -> void:
+			conf.queue_free()
+			_char().presets.erase(n)
+			# Re-point current_preset so preset-on-open never dangles.
+			if String(_char().current_preset) == n:
+				for remaining in _char().presets:
+					_char().current_preset = String(remaining)
+					break
+			_store.save_store()
+			_refresh_presets())
+		conf.canceled.connect(func() -> void: conf.queue_free())
+		_dialog_layer.add_child(conf)
+		conf.popup_centered())
 
 
 func _refresh_presets() -> void:
@@ -556,6 +593,10 @@ func _build_playback_section(parent: VBoxContainer) -> void:
 	_sway_check = _toggle_into(box, "Auto-sway (excite physics)", false,
 		func(v: bool) -> void:
 			_char().playback.sway = v
+			_store.save_store())
+	_show_frames_check = _toggle_into(box, "Display animation frame count",
+		false, func(v: bool) -> void:
+			_char().playback.show_frames = v
 			_store.save_store())
 	# Charge-hold for PLAIN playback: park the active clip on this
 	# frame for the duration below, as if the attack key were held —
@@ -1353,6 +1394,9 @@ func _update_effects(delta: float) -> void:
 # ── In-Game mode ───────────────────────────────────────────────────
 
 func _build_ingame_content() -> void:
+	if not _release_edit_path.is_empty():
+		_build_release_editor()
+		return
 	var idle: String = _char().ingame.idle
 	var idle_btn := Button.new()
 	idle_btn.text = "Reassign idle" if not idle.is_empty() else "Assign Idle"
@@ -1384,6 +1428,9 @@ func _build_ingame_content() -> void:
 				_assigning_idle = false
 				_store.save_store()
 				_activate_rig(rig_path)
+				_rebuild_content()
+			else:
+				_release_edit_path = rig_path
 				_rebuild_content())
 		row.add_child(nm)
 		var bind := Button.new()
@@ -1396,7 +1443,8 @@ func _build_ingame_content() -> void:
 
 	var hold_hint := Label.new()
 	hold_hint.text = "Held binds park on the Playback 'Hold at frame' " \
-		+ "(-1 = off) until released."
+		+ "(-1 = off) until released. Click an animation's name to " \
+		+ "set its release behavior."
 	hold_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hold_hint.modulate = Color(1, 1, 1, 0.6)
 	hold_hint.add_theme_font_size_override("font_size", 12)
@@ -1592,15 +1640,81 @@ func _bind_down(bind_name: String) -> bool:
 	return Input.is_key_pressed(OS.find_keycode_from_string(plain))
 
 
+## Per-animation release policy: what happens when the bound input
+## is let go. "complete" plays the clip to its final frame first;
+## "cut" idles immediately; "cutoff" completes only when released at
+## or past the chosen frame (an attack-commit point).
+func _release_policy(path: String) -> Dictionary:
+	var all: Dictionary = _char().ingame.get("release", {})
+	var rel: Variant = all.get(path)
+	if rel is Dictionary:
+		return rel
+	return {"mode": "complete", "frame": 0}
+
+
+func _set_release(path: String, key: String, value: Variant) -> void:
+	var all: Dictionary = _char().ingame.get("release", {})
+	var rel: Dictionary = all.get(path, {"mode": "complete", "frame": 0})
+	rel[key] = value
+	all[path] = rel
+	_char().ingame.release = all
+	_store.save_store()
+
+
+func _build_release_editor() -> void:
+	var title := Label.new()
+	title.text = _release_edit_path.get_file().get_basename() \
+		+ " - when its button is released:"
+	title.add_theme_font_size_override("font_size", FONT)
+	_content.add_child(title)
+	var rel := _release_policy(_release_edit_path)
+	var modes := ["complete", "cut", "cutoff"]
+	var pick := OptionButton.new()
+	pick.add_item("Complete the animation")
+	pick.add_item("Cut to idle immediately")
+	pick.add_item("Complete only past a cutoff frame")
+	pick.select(maxi(0, modes.find(String(rel.get("mode", "complete")))))
+	pick.item_selected.connect(func(i: int) -> void:
+		_set_release(_release_edit_path, "mode", modes[i])
+		_rebuild_content())
+	_content.add_child(pick)
+	if String(rel.get("mode", "complete")) == "cutoff":
+		_int_slider_into(_content, "Cutoff frame", 0.0, 119.0,
+			float(rel.get("frame", 0)), func(v: float) -> void:
+				_set_release(_release_edit_path, "frame", int(v)))
+		var ch := Label.new()
+		ch.text = "Released before that frame: cut to idle. At or after: completes."
+		ch.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ch.modulate = Color(1, 1, 1, 0.6)
+		ch.add_theme_font_size_override("font_size", 12)
+		_content.add_child(ch)
+	_btn_into(_content, "Back", func() -> void:
+		_release_edit_path = ""
+		_rebuild_content())
+
+
 func _release_held_bind() -> void:
 	_held_bind_key = ""
-	if _ig_parked and _ani != null:
-		# Parked on the hold frame: resume instead of cutting to
-		# idle, so the clip's release events still fire.
-		_ig_parked = false
-		_ig_release_pending = true
-		_ani.play()
+	if _ani == null:
 		return
+	var rel := _release_policy(_active_rig_path)
+	var complete := true
+	match String(rel.get("mode", "complete")):
+		"cut":
+			complete = false
+		"cutoff":
+			complete = int(_ani.get_current_frame()) >= int(rel.get("frame", 0))
+	if _ig_parked:
+		_ig_parked = false
+		_ani.play()
+	if complete:
+		# _process idles once the clip reaches its final frame.
+		_ig_release_pending = true
+		return
+	# Cutting mid-clip skips the events that would end effects, so
+	# kill them here instead of leaving a stuck beam/loop.
+	_beam_off()
+	_loops_off()
 	var idle: String = _char().ingame.idle
 	if not idle.is_empty():
 		_crossfade_to_path(idle)
@@ -1743,6 +1857,8 @@ func _sync_playback_controls() -> void:
 		_hold_frame_slider.value = float(pb.get("hold_frame", -1))
 	if _hold_secs_slider != null:
 		_hold_secs_slider.value = float(pb.get("hold_secs", 1.0))
+	if _show_frames_check != null:
+		_show_frames_check.button_pressed = bool(pb.get("show_frames", false))
 
 
 func _apply_playback() -> void:
@@ -1832,6 +1948,13 @@ func _recenter() -> void:
 func _process(delta: float) -> void:
 	if _ani == null:
 		return
+	if _frame_readout != null:
+		var show_fr: bool = not _char_id.is_empty() and _ani.rig != null \
+			and bool(_char().playback.get("show_frames", false))
+		_frame_readout.visible = show_fr
+		if show_fr:
+			_frame_readout.text = "Frame %d / %d" % [
+				int(_ani.get_current_frame()), _ani.rig.total_frames]
 	if _screen == Screen.SANDBOX:
 		var tilt := _joy.deflect if _joy != null else Vector2.ZERO
 		if tilt != Vector2.ZERO:
