@@ -1480,8 +1480,20 @@ func _evaluate_bone_fk(uuid: String, frame: float, ik_local_override: float = NA
 	# links, attached trinkets) compose against the simulated pose.
 	# Only when a dt-carrying tick armed the sim — scrubs and
 	# tool-driven evaluations render the pose as authored.
-	if cloth_enabled and _cloth_dt > 0.0 and _cloth_uuids.has(uuid):
-		world_rotation = _cloth_sim(uuid, world_start, world_rotation, scaled_length)
+	if cloth_enabled and _cloth_uuids.has(uuid):
+		if _cloth_dt > 0.0:
+			world_rotation = _cloth_sim(uuid, world_start, world_rotation, scaled_length)
+		elif _is_playing:
+			# dt-less evaluation MID-PLAYBACK (a clip switch's
+			# set_current_frame(0), an event re-arm scrub): hold the
+			# sim's last deviation instead of rendering the authored
+			# angle for one frame - legs/cloth/hair visibly jolted on
+			# every completion-to-idle handoff while moving, since
+			# that's when the sim deflects furthest from authored
+			# (2026-09-27). Editor / tool scrubs still render the
+			# pose as authored (_is_playing is false there).
+			world_rotation += float(
+				_cloth_deviation.get(_cloth_sync.get(uuid, uuid), 0.0))
 
 	# Bone aim: blend the animated world rotation toward the target;
 	# children composed after this inherit the aimed direction.
