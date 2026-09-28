@@ -106,6 +106,12 @@ var _release_edit_path := ""
 var _anim_aim_bone := ""
 var _anim_aim_angle := 0.0
 var _anim_aim_w := 0.0
+# Two-hand grip release state: "" = full grip; "primary"/"secondary"
+# = that hand is off the weapon. The weapon's transform relative to
+# the REMAINING hand is captured at release so nothing pops.
+var _grip_released := ""
+var _grip_off := Vector2.ZERO
+var _grip_rot := 0.0
 var _events_editor_built := false
 var _scrub_box: HBoxContainer
 # Sticky scrub-pause: while true, a newly activated animation (list
@@ -1032,6 +1038,20 @@ func _build_weapon_menu() -> void:
 	for i in range(_weapon_bone_pick.item_count):
 		if _weapon_bone_pick.get_item_text(i) == String(w.get("bone", "")):
 			_weapon_bone_pick.select(i)
+	_caption_into(_content, "Second hand (two-handed grip):")
+	var hand2_pick := OptionButton.new()
+	hand2_pick.add_item("(one-handed)")
+	if _ani != null and _ani.rig != null:
+		for bone2 in _ani.rig.bones:
+			hand2_pick.add_item(String(bone2.name))
+	for i in range(hand2_pick.item_count):
+		if i > 0 and hand2_pick.get_item_text(i) == String(w.get("bone2", "")):
+			hand2_pick.select(i)
+	hand2_pick.item_selected.connect(func(i: int) -> void:
+		_domain_edit("weapon", "bone2",
+			"" if i == 0 else hand2_pick.get_item_text(i))
+		_grip_released = "")
+	_content.add_child(hand2_pick)
 	_attach_btn = Button.new()
 	_attach_btn.text = "Attach mode (freeze + drag weapon)"
 	_attach_btn.toggle_mode = true
@@ -1302,7 +1322,8 @@ func _build_event_editor(ev_name: String) -> void:
 
 	_caption_into(v, "Effect type:")
 	var type_pick := OptionButton.new()
-	for t in ["projectile", "burst", "beam_on", "beam_off", "loop", "none"]:
+	for t in ["projectile", "burst", "beam_on", "beam_off", "loop",
+			"weapon_release", "weapon_engage", "none"]:
 		type_pick.add_item(t)
 	for i in range(type_pick.item_count):
 		if type_pick.get_item_text(i) == String(cfg.type):
@@ -1313,7 +1334,20 @@ func _build_event_editor(ev_name: String) -> void:
 		_show_submenu("events"))
 	v.add_child(type_pick)
 
-	if String(cfg.type) != "beam_off" and String(cfg.type) != "none":
+	if String(cfg.type) == "weapon_release":
+		# Which hand lets go of a two-handed weapon; the other keeps
+		# holding it (transform captured at the release moment).
+		_caption_into(v, "Hand that releases:")
+		var hand_pick := OptionButton.new()
+		hand_pick.add_item("secondary")
+		hand_pick.add_item("primary")
+		if String(cfg.get("hand", "secondary")) == "primary":
+			hand_pick.select(1)
+		hand_pick.item_selected.connect(func(i: int) -> void:
+			cfg["hand"] = "primary" if i == 1 else "secondary"
+			_store.save_store())
+		v.add_child(hand_pick)
+	if String(cfg.type) not in ["beam_off", "none", "weapon_release", "weapon_engage"]:
 		_caption_into(v, "Effect image (assets/vfx):")
 		var file_pick := OptionButton.new()
 		for f in _vfx_files():
@@ -1532,6 +1566,10 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 				else float(cfg.get("length", 260.0))
 		"beam_off":
 			_beam_off()
+		"weapon_release":
+			_grip_release(String(cfg.get("hand", "secondary")))
+		"weapon_engage":
+			_grip_released = ""
 		"loop":
 			var tex4: Texture2D = load(VFX_DIR + "/" + String(cfg.file))
 			if tex4 == null:
@@ -1557,6 +1595,24 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			lp.scale = Vector2.ONE * float(cfg.get("scale", 1))
 			add_child(lp)
 			_loops.append({"node": lp, "cfg": cfg, "t": 0.0, "ev": ev_name})
+
+
+## A hand lets go of a two-handed weapon: capture the weapon's
+## transform relative to the REMAINING hand so it rides that hand
+## with zero pop until weapon_engage (or a clip switch) restores
+## the full grip.
+func _grip_release(hand: String) -> void:
+	if _weapon == null or _ani == null or _active_rig_path.is_empty():
+		return
+	var w := _store.effective(_char_id, _active_rig_path, "weapon")
+	var keep := String(w.get("bone", "")) if hand == "secondary" \
+		else String(w.get("bone2", ""))
+	if keep.is_empty() or String(w.get("bone2", "")).is_empty():
+		return
+	var tk := _ani.get_bone_world_transform(keep)
+	_grip_off = tk.affine_inverse() * _weapon.position
+	_grip_rot = _weapon.rotation - tk.get_rotation()
+	_grip_released = hand
 
 
 func _beam_off() -> void:
@@ -2010,6 +2066,7 @@ func _activate_rig(path: String) -> void:
 	_hold_cooldown = false
 	_ig_parked = false
 	_ig_release_pending = false
+	_grip_released = ""
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
@@ -2182,7 +2239,14 @@ func _save_attachment() -> void:
 	target.bone = bone
 	target.ox = local_off.x
 	target.oy = local_off.y
-	target.rot = _weapon.rotation - t.get_rotation()
+	# Two-handed grips derive rotation from the primary-grip -> second
+	# hand line, so the saved offset must be measured against THAT.
+	var bone2 := String(target.get("bone2", ""))
+	if bone2.is_empty():
+		target.rot = _weapon.rotation - t.get_rotation()
+	else:
+		var hand2 := _ani.get_bone_world_transform(bone2).origin
+		target.rot = _weapon.rotation - (hand2 - _weapon.position).angle()
 	target["scale"] = _weapon.scale.x
 	_store.save_store()
 	_attach_set(false)
@@ -2383,8 +2447,27 @@ func _process(delta: float) -> void:
 	if _weapon != null and not _attach_mode \
 			and not String(w.get("bone", "")).is_empty():
 		var t := _ani.get_bone_world_transform(String(w.bone))
-		_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
-		_weapon.rotation = t.get_rotation() + float(w.get("rot", 0))
+		var wb2 := String(w.get("bone2", ""))
+		if not wb2.is_empty() and not _grip_released.is_empty():
+			# Momentary one-hand hold (weapon_release event): ride the
+			# remaining hand with the transform captured at release.
+			var keep := String(w.bone) if _grip_released == "secondary" else wb2
+			var tk := _ani.get_bone_world_transform(keep)
+			_weapon.position = tk * _grip_off
+			_weapon.rotation = tk.get_rotation() + _grip_rot
+		elif not wb2.is_empty():
+			# Two-handed grip (2026-09-28): anchored at the primary
+			# grip point, rotated along the line to the second hand -
+			# the weapon always lies on the grip axis, which is the
+			# stability between the hands.
+			var p1 := t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
+			var p2: Vector2 = _ani.get_bone_world_transform(wb2).origin
+			_weapon.position = p1
+			if p1.distance_to(p2) > 0.5:
+				_weapon.rotation = (p2 - p1).angle() + float(w.get("rot", 0))
+		else:
+			_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
+			_weapon.rotation = t.get_rotation() + float(w.get("rot", 0))
 		_weapon.scale = Vector2(float(w.get("scale", 1)), float(w.get("scale", 1)))
 		# Part sort orders can be ANIMATED - keep the part-relative
 		# weapon z in step with them.
