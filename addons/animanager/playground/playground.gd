@@ -113,6 +113,9 @@ var _grip_released := ""
 # Time spent parked on the hold frame by a held bind - drives the
 # charged-release branch.
 var _hold_elapsed := 0.0
+# True while a direction-flagged movement animation drove the clip
+# switch - releasing the directions then returns to the idle.
+var _moving_via_anim := false
 var _grip_off := Vector2.ZERO
 var _grip_rot := 0.0
 var _events_editor_built := false
@@ -341,6 +344,7 @@ func _enter_character(id: String) -> void:
 	_char_id = id
 	_screen = Screen.SANDBOX
 	_scrub_paused = false
+	_moving_via_anim = false
 	_active_rig_path = ""
 	_release_edit_path = ""
 	_assigning_idle = false
@@ -738,15 +742,22 @@ func _build_movement_section() -> void:
 		hint.modulate = Color(0.5, 0.8, 1.0)
 		hint.add_theme_font_size_override("font_size", 12)
 		box.add_child(hint)
-	# Flying/static characters have no walk clips - direction binds
-	# glide the node itself, animations untouched.
-	_toggle_into(box, "Static movement inputs (flyer glide)",
+	# Movement has two layers (2026-09-28): animations flagged for
+	# directions in their Advanced menu play while those inputs are
+	# held (Herald's run); the static toggle below additionally
+	# glides with NO animation switch (Seraph's flyer drift). Both
+	# use the same direction binds, so the rows always show.
+	_toggle_into(box, "Static movement (glide without a movement animation)",
 		bool(_char().ingame.get("move_enabled", false)),
 		func(v: bool) -> void:
 			_char().ingame.move_enabled = v
-			_store.save_store()
-			_rebuild_content())
-	if bool(_char().ingame.get("move_enabled", false)):
+			_store.save_store())
+	_toggle_into(box, "Auto-face left/right movement",
+		bool(_char().ingame.get("face_move", true)),
+		func(v: bool) -> void:
+			_char().ingame.face_move = v
+			_store.save_store())
+	if true:
 		var mv: Dictionary = _char().ingame.get("move", {})
 		for dir in ["left", "right", "up", "down"]:
 			var d := String(dir)
@@ -1853,6 +1864,18 @@ func _input(event: InputEvent) -> void:
 			_release_held_bind()
 
 
+## First animation flagged (Advanced menu) for ANY of the held
+## movement directions; "" when none matches.
+func _movement_anim_for(held: Array) -> String:
+	for r in _char().rigs:
+		var path := String(r.path)
+		var rel := _release_policy(path)
+		for d in held:
+			if bool(rel.get("move_" + String(d), false)):
+				return path
+	return ""
+
+
 ## Is the named bind currently held? Handles "Mouse<n>" and plain
 ## keys; a modifier combo polls its final key (movement binds are
 ## expected to be plain keys).
@@ -1956,6 +1979,21 @@ func _build_release_editor() -> void:
 	_toggle_into(_content, "Effects aim at the cursor",
 		bool(rel.get("fx_aim", false)), func(v: bool) -> void:
 			_set_release(_release_edit_path, "fx_aim", v))
+	_content.add_child(HSeparator.new())
+	# Movement animation (2026-09-28): while a bound direction input
+	# with a checked box here is held, this animation plays and the
+	# character glides that way (left/right auto-mirror facing when
+	# the Movement section's auto-face toggle is on).
+	_caption_into(_content, "Movement animation for held directions:")
+	var mdir_row := HBoxContainer.new()
+	mdir_row.add_theme_constant_override("separation", 10)
+	for mspec in [["Left", "move_l"], ["Right", "move_r"],
+			["Up", "move_u"], ["Down", "move_d"]]:
+		var mkey: String = mspec[1]
+		_toggle_into(mdir_row, String(mspec[0]),
+			bool(rel.get(mkey, false)), func(v: bool) -> void:
+				_set_release(_release_edit_path, mkey, v))
+	_content.add_child(mdir_row)
 	_content.add_child(HSeparator.new())
 	# Charge-hold, per animation: park on this frame (auto-play uses
 	# the timer; a held bind parks while the input is down).
@@ -2431,24 +2469,51 @@ func _process(delta: float) -> void:
 					# mid-fade read as the whole clip replaying.
 					_ani.loop_override = 0
 					_crossfade_to_path(post_idle)
-	# Static movement: bound direction inputs glide the node itself -
-	# no clip switching, made for flyers with no walk anims.
+	# Movement: bound direction inputs. An animation flagged for a
+	# held direction (Advanced menu) plays while moving; the static
+	# toggle glides even without one (flyers). Left/right auto-
+	# mirrors facing (art faces LEFT natively). An in-flight attack
+	# is never interrupted - the glide continues and the movement
+	# animation resumes when the attack lands.
 	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
-			and bool(_char().ingame.get("move_enabled", false)) \
-			and _capture_dialog == null:
+			and _capture_dialog == null and not _scrub_paused:
 		var mvb: Dictionary = _char().ingame.get("move", {})
 		var dv := Vector2.ZERO
+		var held_dirs := []
 		if _bind_down(String(mvb.get("left", ""))):
 			dv.x -= 1.0
+			held_dirs.append("l")
 		if _bind_down(String(mvb.get("right", ""))):
 			dv.x += 1.0
+			held_dirs.append("r")
 		if _bind_down(String(mvb.get("up", ""))):
 			dv.y -= 1.0
+			held_dirs.append("u")
 		if _bind_down(String(mvb.get("down", ""))):
 			dv.y += 1.0
-		if dv != Vector2.ZERO:
+			held_dirs.append("d")
+		var move_anim := ""
+		if not held_dirs.is_empty():
+			move_anim = _movement_anim_for(held_dirs)
+		var attack_busy: bool = not _held_bind_key.is_empty() \
+			or _ig_release_pending
+		if dv != Vector2.ZERO and (not move_anim.is_empty() \
+				or bool(_char().ingame.get("move_enabled", false))):
 			_ani.position += dv.normalized() \
 				* (DRAG_MAX_DEFLECT * DRAG_SPEED_PER_PX) * delta
+			if dv.x != 0.0 and bool(_char().ingame.get("face_move", true)):
+				_ani.scale.x = absf(_ani.scale.x) \
+					* (-1.0 if dv.x > 0.0 else 1.0)
+		if not attack_busy:
+			if not move_anim.is_empty() and move_anim != _active_rig_path:
+				_moving_via_anim = true
+				_crossfade_to_path(move_anim)
+			elif move_anim.is_empty() and _moving_via_anim:
+				_moving_via_anim = false
+				var move_idle: String = _char().ingame.idle
+				if not move_idle.is_empty() \
+						and move_idle != _active_rig_path:
+					_crossfade_to_path(move_idle)
 	# Cursor aim.
 	if _aim_enabled and _ani.rig != null and _aim_bone_pick != null \
 			and _aim_bone_pick.selected >= 0:
