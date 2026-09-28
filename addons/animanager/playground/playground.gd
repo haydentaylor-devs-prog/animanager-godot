@@ -1738,7 +1738,7 @@ func _input(event: InputEvent) -> void:
 			and _panel_tab.get_global_rect().has_point(mb.position))
 		var mname := "Mouse%d" % mb.button_index
 		var mbinds: Dictionary = _char().ingame.binds
-		if mb.pressed and not over_ui:
+		if mb.pressed and not over_ui and not _anim_committed():
 			for rig_path in mbinds:
 				if mbinds[rig_path] == mname:
 					_held_bind_key = mname
@@ -1772,6 +1772,9 @@ func _input(event: InputEvent) -> void:
 	if key_event.pressed:
 		# Typing in a text field must not fire attacks.
 		if get_viewport().gui_get_focus_owner() is LineEdit:
+			return
+		# A committed clip (complete / past-cutoff) finishes first.
+		if _anim_committed():
 			return
 		for rig_path in binds:
 			if binds[rig_path] == pressed_name:
@@ -1899,6 +1902,28 @@ func _build_release_editor() -> void:
 	_btn_into(_content, "Back", func() -> void:
 		_release_edit_path = ""
 		_rebuild_content())
+
+
+## True while the active bind-triggered clip is COMMITTED: its
+## release policy says it must finish ("complete", or "cutoff" with
+## the playhead already at/past the cutoff frame), so new bind
+## presses are ignored until it lands back at idle (2026-09-27).
+## Only in-flight clips lock (a held input or a playing release
+## tail) - the idle loop never does - and scrub-hold bypasses it.
+func _anim_committed() -> bool:
+	if _ani == null or _ani.rig == null or _active_rig_path.is_empty():
+		return false
+	if _scrub_paused:
+		return false
+	if _held_bind_key.is_empty() and not _ig_release_pending:
+		return false
+	var rel := _release_policy(_active_rig_path)
+	match String(rel.get("mode", "complete")):
+		"complete":
+			return true
+		"cutoff":
+			return int(_ani.get_current_frame()) >= int(rel.get("frame", 0))
+	return false
 
 
 func _release_held_bind() -> void:
