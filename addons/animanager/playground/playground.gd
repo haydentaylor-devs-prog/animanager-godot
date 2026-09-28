@@ -110,6 +110,9 @@ var _anim_aim_w := 0.0
 # = that hand is off the weapon. The weapon's transform relative to
 # the REMAINING hand is captured at release so nothing pops.
 var _grip_released := ""
+# Time spent parked on the hold frame by a held bind - drives the
+# charged-release branch.
+var _hold_elapsed := 0.0
 var _grip_off := Vector2.ZERO
 var _grip_rot := 0.0
 var _events_editor_built := false
@@ -1879,7 +1882,8 @@ func _release_policy(path: String) -> Dictionary:
 	var rel: Variant = all.get(path)
 	if rel is Dictionary:
 		return rel
-	return {"mode": "complete", "frame": 0, "hold_frame": -1, "hold_secs": 1.0}
+	return {"mode": "complete", "frame": 0, "hold_frame": -1,
+		"hold_secs": 1.0, "charge_clip": "", "charge_ms": 500}
 
 
 func _set_release(path: String, key: String, value: Variant) -> void:
@@ -1961,6 +1965,35 @@ func _build_release_editor() -> void:
 	_int_slider_into(_content, "Hold seconds (-1 = forever)", -1.0, 10.0,
 		float(rel.get("hold_secs", 1.0)), func(v: float) -> void:
 			_set_release(_release_edit_path, "hold_secs", v))
+	# Charged release (2026-09-28): released from an infinite hold
+	# after at least the threshold, a DIFFERENT animation plays as
+	# the release instead of this clip's own tail - tap keeps the
+	# quick attack, a long hold branches to the heavy one.
+	_caption_into(_content, "Charged release plays instead (optional):")
+	var cc_pick := OptionButton.new()
+	var cc_paths := [""]
+	cc_pick.add_item("(none)")
+	for r in _char().rigs:
+		if String(r.path) != _release_edit_path:
+			cc_pick.add_item(String(r.name))
+			cc_paths.append(String(r.path))
+	for i in range(cc_paths.size()):
+		if i > 0 and cc_paths[i] == String(rel.get("charge_clip", "")):
+			cc_pick.select(i)
+	cc_pick.item_selected.connect(func(i: int) -> void:
+		_set_release(_release_edit_path, "charge_clip", cc_paths[i]))
+	_content.add_child(cc_pick)
+	if not String(rel.get("charge_clip", "")).is_empty():
+		_int_slider_into(_content, "Charge threshold (ms)", 100.0, 5000.0,
+			float(rel.get("charge_ms", 500)), func(v: float) -> void:
+				_set_release(_release_edit_path, "charge_ms", int(v)))
+		var cc_hint := Label.new()
+		cc_hint.text = ("Needs a hold frame with Hold seconds -1: time "
+			+ "parked there while the input is held is what charges.")
+		cc_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		cc_hint.modulate = Color(1, 1, 1, 0.6)
+		cc_hint.add_theme_font_size_override("font_size", 12)
+		_content.add_child(cc_hint)
 	_btn_into(_content, "Back", func() -> void:
 		_release_edit_path = ""
 		_rebuild_content())
@@ -1999,6 +2032,16 @@ func _release_held_bind() -> void:
 		# (the release yanked them to idle, 2026-09-28).
 		return
 	var rel := _release_policy(_active_rig_path)
+	# Charged-release branch: released from the hold park after the
+	# threshold, a different clip IS the release - it plays out and
+	# then idles like a completed tail.
+	var charge_clip := String(rel.get("charge_clip", ""))
+	if _ig_parked and not charge_clip.is_empty() \
+			and _hold_elapsed * 1000.0 >= float(rel.get("charge_ms", 500)):
+		_ig_parked = false
+		_crossfade_to_path(charge_clip)
+		_ig_release_pending = true
+		return
 	var complete := true
 	match String(rel.get("mode", "complete")):
 		"cut":
@@ -2067,6 +2110,7 @@ func _activate_rig(path: String) -> void:
 	_ig_parked = false
 	_ig_release_pending = false
 	_grip_released = ""
+	_hold_elapsed = 0.0
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
@@ -2362,11 +2406,14 @@ func _process(delta: float) -> void:
 		var ig_rel := _release_policy(_active_rig_path)
 		var ig_hold := int(ig_rel.get("hold_frame", -1))
 		var at_hold: bool = ig_hold >= 0 and int(_ani.get_current_frame()) == ig_hold
+		if _ig_parked:
+			_hold_elapsed += delta
 		if not _held_bind_key.is_empty() and not _ig_parked and at_hold \
 				and _ani.is_playing() \
 				and float(ig_rel.get("hold_secs", 1.0)) < 0.0:
 			_ani.pause()
 			_ig_parked = true
+			_hold_elapsed = 0.0
 		elif _ig_release_pending and _ani.is_playing():
 			# Play the authored return-to-idle tail out in full; only
 			# the LAST frame hands off to the idle crossfade. Fading
