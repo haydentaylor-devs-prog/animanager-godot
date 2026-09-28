@@ -1737,7 +1737,11 @@ func _input(event: InputEvent) -> void:
 			or (_joy != null and _joy.visible \
 			and _joy.get_global_rect().has_point(mb.position)) \
 			or (_panel_tab != null and _panel_tab.visible \
-			and _panel_tab.get_global_rect().has_point(mb.position))
+			and _panel_tab.get_global_rect().has_point(mb.position)) \
+			or (_scrub_box != null and _scrub_box.visible \
+			and _scrub_box.get_global_rect().has_point(mb.position)) \
+			or (_save_btn != null and _save_btn.visible \
+			and _save_btn.get_global_rect().has_point(mb.position))
 		var mname := "Mouse%d" % mb.button_index
 		var mbinds: Dictionary = _char().ingame.binds
 		if mb.pressed and not over_ui and not _anim_committed():
