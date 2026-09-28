@@ -1351,6 +1351,12 @@ func _build_event_editor(ev_name: String) -> void:
 			func(val: float) -> void:
 				cfg["scale"] = val
 				_store.save_store())
+		# Art-orientation correction (2026-09-27): sheets drawn facing
+		# up (etc.) rotate to match their travel/anchor direction.
+		_int_slider_into(v, "Effect rotation (deg)", -180.0, 180.0,
+			float(cfg.get("rot", 0)), func(val: float) -> void:
+				cfg["rot"] = int(val)
+				_store.save_store())
 		# Bone-local anchor offset: rides the bone's rotation, so an
 		# offset reaching the staff TIP stays on the tip through the
 		# charge swing and through movement (2026-09-26).
@@ -1478,7 +1484,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			sp.vframes = maxi(1, int(cfg.get("vframes", 1)))
 			sp.global_position = spawn
 			var dir := _fx_direction(spawn)
-			sp.rotation = dir.angle()
+			sp.rotation = dir.angle() + deg_to_rad(float(cfg.get("rot", 0)))
 			sp.scale = Vector2(float(cfg.get("scale", 1)), float(cfg.get("scale", 1)))
 			add_child(sp)
 			_projectiles.append({
@@ -1492,6 +1498,7 @@ func _on_frame_event(ev_name: String, _payload: String) -> void:
 			var b := Sprite2D.new()
 			_crispify(b)
 			b.texture = tex2
+			b.rotation = deg_to_rad(float(cfg.get("rot", 0)))
 			b.global_position = spawn
 			b.scale = Vector2.ONE * float(cfg.get("scale", 1)) * 0.5
 			add_child(b)
@@ -1586,7 +1593,8 @@ func _update_effects(delta: float) -> void:
 		var node := lp.node as Sprite2D
 		var lt := _ani.get_bone_world_transform(String(lcfg.get("bone", "")))
 		node.global_position = _bone_anchor_global(lcfg)
-		node.rotation = lt.get_rotation() + _ani.rotation
+		node.rotation = lt.get_rotation() + _ani.rotation \
+			+ deg_to_rad(float(lcfg.get("rot", 0)))
 		# Scale + sheet grid read LIVE like fps already was - they
 		# were spawn-frozen, so slider changes did nothing to a
 		# long-lived loop (parked charge-ups) until it respawned
@@ -1604,7 +1612,7 @@ func _update_effects(delta: float) -> void:
 		var spawn := _bone_anchor_global(_beam_cfg)
 		var dir := _fx_direction(spawn)
 		_beam.global_position = spawn
-		_beam.rotation = dir.angle()
+		_beam.rotation = dir.angle() + deg_to_rad(float(_beam_cfg.get("rot", 0)))
 		_beam_len = minf(
 			_beam_len + float(_beam_cfg.get("rate", 1200.0)) * delta,
 			float(_beam_cfg.get("length", 260.0)))
