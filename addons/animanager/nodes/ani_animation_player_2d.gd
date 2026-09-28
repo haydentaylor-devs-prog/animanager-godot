@@ -885,8 +885,10 @@ func _rebuild_indices() -> void:
 	# switch visibly re-settle the hair/cloth/legs from rest
 	# (2026-09-27). Keys that don't exist in the new rig simply never
 	# get read, so a genuinely different skeleton still starts fresh.
+	# Bone aims are kept for the same reason - clearing them snapped
+	# an aimed arm off its target the instant a clip switched, while
+	# everything else crossfaded; callers fade aims out themselves.
 	_clear_layer()
-	_aim_by_uuid.clear()
 
 	if rig == null:
 		_cloth_uuids.clear()

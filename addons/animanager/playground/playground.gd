@@ -104,6 +104,8 @@ var _ig_release_pending := false
 # In-game per-animation release policy editor (open rig path).
 var _release_edit_path := ""
 var _anim_aim_bone := ""
+var _anim_aim_angle := 0.0
+var _anim_aim_w := 0.0
 var _events_editor_built := false
 var _scrub_box: HBoxContainer
 # Sticky scrub-pause: while true, a newly activated animation (list
@@ -1972,7 +1974,6 @@ func _crossfade_to_path(path: String) -> void:
 	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
 	_active_rig_path = path
-	_anim_aim_bone = ""
 	_apply_all_domains()
 
 
@@ -2008,7 +2009,6 @@ func _activate_rig(path: String) -> void:
 	# clip keeps its own effective looping through the blend.
 	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
-	_anim_aim_bone = ""
 	_apply_all_domains()
 	_apply_playback()
 	# Auto-play the recorded layering for this base (runtime supports
@@ -2340,16 +2340,33 @@ func _process(delta: float) -> void:
 			and _ani.rig != null:
 		var arel := _release_policy(_active_rig_path)
 		var abone := String(arel.get("aim_bone", ""))
-		if bool(arel.get("aim_enabled", false)) and not abone.is_empty():
-			var aorigin: Vector2 = _ani.get_bone_world_transform(abone).origin
-			var atarget := _ani.to_local(get_global_mouse_position())
-			_ani.set_bone_aim(abone, (atarget - aorigin).angle(),
-				float(arel.get("aim_weight", 100)) / 100.0)
-			_anim_aim_bone = abone
-		elif not _anim_aim_bone.is_empty():
-			# The active clip aims no bone: release the previous one.
+		var aiming: bool = bool(arel.get("aim_enabled", false)) \
+			and not abone.is_empty()
+		if aiming and abone != _anim_aim_bone \
+				and not _anim_aim_bone.is_empty():
+			# The aimed bone changed between clips: drop the old one.
 			_ani.set_bone_aim(_anim_aim_bone, 0.0, 0.0)
-			_anim_aim_bone = ""
+			_anim_aim_w = 0.0
+		if aiming:
+			_anim_aim_bone = abone
+			var aorigin: Vector2 = _ani.get_bone_world_transform(abone).origin
+			_anim_aim_angle = (_ani.to_local(get_global_mouse_position())
+				- aorigin).angle()
+		# The weight eases in/out over the crossfade duration instead
+		# of snapping - the arm used to jump off the cursor the
+		# instant the throw handed back to idle (2026-09-27). The
+		# last cursor angle is held while fading out, and bone aims
+		# survive rig switches, so the fade rides the transition.
+		var aim_goal := 0.0
+		if aiming:
+			aim_goal = float(arel.get("aim_weight", 100)) / 100.0
+		if not _anim_aim_bone.is_empty():
+			_anim_aim_w = move_toward(_anim_aim_w, aim_goal,
+				delta / maxf(_fade_sec(), 0.05))
+			_ani.set_bone_aim(_anim_aim_bone, _anim_aim_angle, _anim_aim_w)
+			if _anim_aim_w <= 0.0 and not aiming:
+				_ani.set_bone_aim(_anim_aim_bone, 0.0, 0.0)
+				_anim_aim_bone = ""
 	# Weapon live follow (not while fitting).
 	var w := {} if _active_rig_path.is_empty() else \
 		_store.effective(_char_id, _active_rig_path, "weapon")
