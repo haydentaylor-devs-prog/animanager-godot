@@ -431,18 +431,24 @@ func _build_workspace() -> void:
 	_scrub_box.visible = false
 	for spec in [
 		["Pause", func() -> void:
+			# A HOLD, not a pause: speed 0 with the clip still playing,
+			# so stepped frames dispatch their events (effects spawn
+			# while scrubbing) and cloth keeps simulating.
 			_scrub_paused = true
 			if _ani != null:
-				_ani.pause()],
+				_ani.speed = 0.0
+				_ani.play()],
 		["Play", func() -> void:
 			_scrub_paused = false
+			_apply_playback()
 			if _ani != null:
 				_ani.play()],
 		["+1 Frame", func() -> void:
 			if _ani == null or _ani.rig == null:
 				return
 			_scrub_paused = true
-			_ani.pause()
+			_ani.speed = 0.0
+			_ani.play()
 			var nf := int(_ani.get_current_frame()) + 1
 			if nf >= _ani.rig.total_frames:
 				nf = 0
@@ -1935,12 +1941,11 @@ func _crossfade_to_path(path: String) -> void:
 	if _ani.rig == null:
 		_activate_rig(path)
 		return
-	# Scrub-pause: hard-cut (a fade would freeze mid-blend showing
-	# the OLD pose) and park on frame 0.
+	# Scrub-hold: hard-cut (a fade would freeze mid-blend showing
+	# the OLD pose) and park on frame 0 - speed stays 0 via
+	# _apply_playback, so frame-0 events still fire.
 	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
-	if _scrub_paused:
-		_ani.pause()
 	_active_rig_path = path
 	_anim_aim_bone = ""
 	_apply_all_domains()
@@ -1978,8 +1983,6 @@ func _activate_rig(path: String) -> void:
 	# clip keeps its own effective looping through the blend.
 	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
-	if _scrub_paused:
-		_ani.pause()
 	_anim_aim_bone = ""
 	_apply_all_domains()
 	_apply_playback()
@@ -2110,7 +2113,7 @@ func _apply_playback() -> void:
 	var pb: Dictionary = _char().playback
 	var z := float(pb.zoom)
 	_ani.scale = Vector2(z * signf(_ani.scale.x if _ani.scale.x != 0 else 1.0), z)
-	_ani.speed = float(pb.speed)
+	_ani.speed = 0.0 if _scrub_paused else float(pb.speed)
 
 
 func _attach_set(on: bool) -> void:

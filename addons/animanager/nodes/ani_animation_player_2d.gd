@@ -880,10 +880,11 @@ func _rebuild_indices() -> void:
 	_frames_by_bone.clear()
 	_ik_chains_by_leaf.clear()
 	_pose_by_uuid.clear()
-	_cloth_tip.clear()
-	_cloth_prev.clear()
-	_cloth_deviation.clear()
-	_cloth_stepped.clear()
+	# Cloth/hair/limb sim state is deliberately KEPT: a character's
+	# clips share bone identities, so clearing it made every clip
+	# switch visibly re-settle the hair/cloth/legs from rest
+	# (2026-09-27). Keys that don't exist in the new rig simply never
+	# get read, so a genuinely different skeleton still starts fresh.
 	_clear_layer()
 	_aim_by_uuid.clear()
 
