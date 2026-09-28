@@ -2039,6 +2039,9 @@ func _release_held_bind() -> void:
 	if _ig_parked and not charge_clip.is_empty() \
 			and _hold_elapsed * 1000.0 >= float(rel.get("charge_ms", 500)):
 		_ig_parked = false
+		# Clamp the outgoing clip so it holds its parked pose under
+		# the fade instead of wrapping and replaying its start.
+		_ani.loop_override = 0
 		_crossfade_to_path(charge_clip)
 		_ig_release_pending = true
 		return
