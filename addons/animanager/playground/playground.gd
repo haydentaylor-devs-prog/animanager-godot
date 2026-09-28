@@ -116,6 +116,10 @@ var _hold_elapsed := 0.0
 # True while a direction-flagged movement animation drove the clip
 # switch - releasing the directions then returns to the idle.
 var _moving_via_anim := false
+# Session memory of collapsible-section expansion, keyed by title -
+# content-area sections are rebuilt constantly (bind captures,
+# submenu switches) and used to re-collapse every time.
+var _collapse_state := {}
 var _grip_off := Vector2.ZERO
 var _grip_rot := 0.0
 var _events_editor_built := false
@@ -2633,10 +2637,15 @@ func _collapsible(parent: VBoxContainer, text: String, collapsed: bool) -> VBoxC
 	btn.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 6)
-	box.visible = not collapsed
+	# The passed default only applies the FIRST time this session; a
+	# rebuild (assigning a movement bind re-renders the whole home)
+	# restores whatever the user last left the section at, instead of
+	# re-collapsing it mid-workflow (2026-09-28).
+	box.visible = bool(_collapse_state.get(text, not collapsed))
 	btn.text = ("v  " if box.visible else ">  ") + text
 	btn.pressed.connect(func() -> void:
 		box.visible = not box.visible
+		_collapse_state[text] = box.visible
 		btn.text = ("v  " if box.visible else ">  ") + text)
 	parent.add_child(btn)
 	parent.add_child(box)
