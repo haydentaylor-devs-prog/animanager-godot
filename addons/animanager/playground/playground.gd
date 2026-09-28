@@ -1580,6 +1580,14 @@ func _update_effects(delta: float) -> void:
 		var lt := _ani.get_bone_world_transform(String(lcfg.get("bone", "")))
 		node.global_position = _bone_anchor_global(lcfg)
 		node.rotation = lt.get_rotation() + _ani.rotation
+		# Scale + sheet grid read LIVE like fps already was - they
+		# were spawn-frozen, so slider changes did nothing to a
+		# long-lived loop (parked charge-ups) until it respawned
+		# (2026-09-27). lcfg is the stored binding dict itself, so
+		# the editor's writes land here immediately.
+		node.scale = Vector2.ONE * float(lcfg.get("scale", 1.0))
+		node.hframes = maxi(1, int(lcfg.get("hframes", 4)))
+		node.vframes = maxi(1, int(lcfg.get("vframes", 1)))
 		var total := maxi(1, int(lcfg.get("hframes", 4))) \
 			* maxi(1, int(lcfg.get("vframes", 1)))
 		node.frame = int(lp.t * float(lcfg.get("fps", 10.0))) % total
