@@ -1100,6 +1100,16 @@ func _build_weapon_menu() -> void:
 	# draws all parts in one canvas item, so the simple toggle
 	# stays the fallback.
 	_caption_into(_content, "Layer weapon against a part:")
+	if not bool(_store.effective(_char_id, _active_rig_path, "shading")
+			.get("shaded", true)):
+		var shade_warn := Label.new()
+		shade_warn.text = ("Needs Shading ON (Shading Options) - only "
+			+ "shaded mode gives each part its own layer to slot "
+			+ "between. Unmasked rigs look identical shaded.")
+		shade_warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		shade_warn.modulate = Color(1.0, 0.75, 0.4)
+		shade_warn.add_theme_font_size_override("font_size", 12)
+		_content.add_child(shade_warn)
 	var lay_pick := OptionButton.new()
 	lay_pick.add_item("(simple behind/front)")
 	if _ani != null and _ani.rig != null:
