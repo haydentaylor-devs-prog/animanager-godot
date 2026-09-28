@@ -1936,6 +1936,12 @@ func _release_held_bind() -> void:
 	_held_bind_key = ""
 	if _ani == null:
 		return
+	if _scrub_paused:
+		# Scrub-hold: a release neither cancels nor completes - the
+		# clip stays parked for frame stepping. Cut-on-release
+		# policies made bind-triggered clips impossible to scrub
+		# (the release yanked them to idle, 2026-09-28).
+		return
 	var rel := _release_policy(_active_rig_path)
 	var complete := true
 	match String(rel.get("mode", "complete")):
