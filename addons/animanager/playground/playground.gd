@@ -120,6 +120,11 @@ var _moving_via_anim := false
 # content-area sections are rebuilt constantly (bind captures,
 # submenu switches) and used to re-collapse every time.
 var _collapse_state := {}
+# The bone currently held by the steady-hand lock, so a weapon
+# removal or bone change releases it - aims survive rig switches,
+# and a stale one left Herald's hand twisted 180 deg permanently
+# (2026-09-28).
+var _steady_bone_last := ""
 var _grip_off := Vector2.ZERO
 var _grip_rot := 0.0
 var _events_editor_built := false
@@ -349,6 +354,7 @@ func _enter_character(id: String) -> void:
 	_screen = Screen.SANDBOX
 	_scrub_paused = false
 	_moving_via_anim = false
+	_steady_bone_last = ""
 	_active_rig_path = ""
 	_release_edit_path = ""
 	_assigning_idle = false
@@ -2208,16 +2214,23 @@ func _apply_domain(domain: String) -> void:
 		"weapon":
 			_apply_weapon(t)
 			var steady_bone := String(t.get("bone", ""))
+			var steady_on: bool = not steady_bone.is_empty() \
+				and bool(t.get("steady", false))
+			# Release a PREVIOUS steady bone explicitly: aims persist
+			# across rig switches, so removing the weapon or picking
+			# a different bone otherwise left the old hand locked at
+			# the captured angle forever.
+			if not _steady_bone_last.is_empty() \
+					and _steady_bone_last != steady_bone:
+				_ani.set_bone_aim(_steady_bone_last, 0.0, 0.0)
+			_steady_bone_last = steady_bone if steady_on else ""
 			if not steady_bone.is_empty():
 				_ani.set_bone_aim(
 					steady_bone,
 					deg_to_rad(float(t.get("steady_deg", 0.0))),
-					1.0 if bool(t.get("steady", false)) else 0.0)
-				# The rig setter cleared bone aims and already
-				# evaluated a pose WITHOUT the steady lock - without
-				# this re-evaluation that unpinned pose renders for
-				# one frame on every clip switch (the staff flicked
-				# ~15 deg at the end of the beam attack, 2026-09-27).
+					1.0 if steady_on else 0.0)
+				# Re-evaluate so the (un)locked pose renders THIS
+				# frame instead of one frame late on clip switches.
 				_ani.set_current_frame(_ani.get_current_frame())
 
 
