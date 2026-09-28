@@ -106,6 +106,9 @@ var _release_edit_path := ""
 var _anim_aim_bone := ""
 var _events_editor_built := false
 var _scrub_box: HBoxContainer
+# Sticky scrub-pause: while true, a newly activated animation (list
+# tap or keybind) parks PAUSED on its frame 0 for inspection.
+var _scrub_paused := false
 var _show_frames_check: CheckBox
 var _frame_readout: Label
 var _fade_slider: HSlider
@@ -326,6 +329,7 @@ func _show_menu() -> void:
 func _enter_character(id: String) -> void:
 	_char_id = id
 	_screen = Screen.SANDBOX
+	_scrub_paused = false
 	_active_rig_path = ""
 	_release_edit_path = ""
 	_assigning_idle = false
@@ -427,14 +431,17 @@ func _build_workspace() -> void:
 	_scrub_box.visible = false
 	for spec in [
 		["Pause", func() -> void:
+			_scrub_paused = true
 			if _ani != null:
 				_ani.pause()],
 		["Play", func() -> void:
+			_scrub_paused = false
 			if _ani != null:
 				_ani.play()],
 		["+1 Frame", func() -> void:
 			if _ani == null or _ani.rig == null:
 				return
+			_scrub_paused = true
 			_ani.pause()
 			var nf := int(_ani.get_current_frame()) + 1
 			if nf >= _ani.rig.total_frames:
@@ -1920,8 +1927,12 @@ func _crossfade_to_path(path: String) -> void:
 	if _ani.rig == null:
 		_activate_rig(path)
 		return
-	_ani.crossfade_to(res, _fade_sec())
+	# Scrub-pause: hard-cut (a fade would freeze mid-blend showing
+	# the OLD pose) and park on frame 0.
+	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
+	if _scrub_paused:
+		_ani.pause()
 	_active_rig_path = path
 	_anim_aim_bone = ""
 	_apply_all_domains()
@@ -1957,8 +1968,10 @@ func _activate_rig(path: String) -> void:
 	# falls back to a cut when there is nothing to fade from). The
 	# loop override is set AFTER the fade capture, so the OUTGOING
 	# clip keeps its own effective looping through the blend.
-	_ani.crossfade_to(res, _fade_sec())
+	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
 	_ani.loop_override = 1
+	if _scrub_paused:
+		_ani.pause()
 	_anim_aim_bone = ""
 	_apply_all_domains()
 	_apply_playback()
