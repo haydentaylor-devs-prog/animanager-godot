@@ -83,6 +83,8 @@ var _dragging := false
 # Layering / aim test state
 var _layer_overlay_path := ""
 var _layer_mask_pick: OptionButton
+var _layer_mask_edit: LineEdit
+var _layer_mask_text := ""
 var _layer_hold := -1.0
 var _layer_hold_secs := 0.0  # auto-release timer; 0 = manual release
 
@@ -1203,9 +1205,28 @@ func _build_layering_menu() -> void:
 			_layer_overlay_path = rig_path
 			_show_submenu("layering"))
 		_content.add_child(b)
+	# Mask roots: a comma-separated LIST of bones whose subtrees the
+	# overlay drives (2026-09-28). Single-torso rigs (Herald) mask
+	# both arms + neck instead of a torso that would drag the legs
+	# along. The dropdown appends its pick to the field.
+	_caption_into(_content, "Mask root bones (comma-separated subtree roots):")
+	_layer_mask_edit = LineEdit.new()
+	_layer_mask_edit.text = _layer_mask_text
+	_layer_mask_edit.placeholder_text = "e.g. Right Arm Upper Bone, Left Arm Upper Bone"
+	_layer_mask_edit.text_changed.connect(func(t2: String) -> void:
+		_layer_mask_text = t2)
+	_content.add_child(_layer_mask_edit)
 	_layer_mask_pick = OptionButton.new()
 	_content.add_child(_layer_mask_pick)
 	_fill_bone_pick(_layer_mask_pick, "torso upper")
+	_layer_mask_pick.item_selected.connect(func(i: int) -> void:
+		var bn := _layer_mask_pick.get_item_text(i)
+		if _layer_mask_text.strip_edges().is_empty():
+			_layer_mask_text = bn
+		elif not _layer_mask_text.containsn(bn):
+			_layer_mask_text += ", " + bn
+		if _layer_mask_edit != null:
+			_layer_mask_edit.text = _layer_mask_text)
 	_slider_into(_content, "Hold at frame (-1 = off)", -1.0, 60.0, _layer_hold,
 		func(v: float) -> void: _layer_hold = roundf(v))
 	_slider_into(_content, "Hold duration (s, 0 = manual release)", 0.0, 10.0,
@@ -1220,12 +1241,17 @@ func _build_layering_menu() -> void:
 
 
 func _play_layer_test(record: bool) -> void:
-	if _layer_overlay_path.is_empty() or _layer_mask_pick.selected < 0:
+	if _layer_overlay_path.is_empty():
 		return
 	var overlay := _load_rig_res(_layer_overlay_path)
 	if overlay == null:
 		return
-	var mask := _layer_mask_pick.get_item_text(_layer_mask_pick.selected)
+	var mask := _layer_mask_text.strip_edges()
+	if mask.is_empty() and _layer_mask_pick != null \
+			and _layer_mask_pick.selected >= 0:
+		mask = _layer_mask_pick.get_item_text(_layer_mask_pick.selected)
+	if mask.is_empty():
+		return
 	if _ani.play_layer(overlay, mask, 0.12) and _layer_hold >= 0.0:
 		_ani.set_layer_hold(_layer_hold)
 		# Simulate the player holding the attack: auto-release after

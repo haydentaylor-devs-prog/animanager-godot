@@ -424,16 +424,25 @@ func play_layer(
 ) -> bool:
 	if overlay == null or rig == null:
 		return false
-	var root_uuid := ""
-	var needle := mask_root_name.to_lower()
-	for bone in rig.bones:
-		if String(bone.get("name", "")).to_lower().contains(needle):
-			root_uuid = String(bone.get("uuid", ""))
-			break
-	if root_uuid.is_empty():
+	# The mask may name SEVERAL roots, comma-separated - the mask is
+	# the union of their subtrees (2026-09-28). Rigs whose torso IS
+	# the root bone (Herald) have no single upper-body root: masking
+	# the torso masks the whole skeleton, so an attack overlay froze
+	# the legs. "Right Arm Upper Bone, Left Arm Upper Bone, Neck
+	# Bone" masks the upper body without touching the legs.
+	var root_uuids := []
+	for part_name in mask_root_name.split(","):
+		var needle := part_name.strip_edges().to_lower()
+		if needle.is_empty():
+			continue
+		for bone in rig.bones:
+			if String(bone.get("name", "")).to_lower().contains(needle):
+				root_uuids.append(String(bone.get("uuid", "")))
+				break
+	if root_uuids.is_empty():
 		return false
 	_layer_mask.clear()
-	var queue := [root_uuid]
+	var queue := root_uuids.duplicate()
 	while not queue.is_empty():
 		var uuid: String = queue.pop_back()
 		_layer_mask[uuid] = true
