@@ -766,6 +766,11 @@ func _build_movement_section() -> void:
 		func(v: bool) -> void:
 			_char().ingame.face_move = v
 			_store.save_store())
+	_toggle_into(box, "Face the cursor (left/right)",
+		bool(_char().ingame.get("face_cursor", false)),
+		func(v: bool) -> void:
+			_char().ingame.face_cursor = v
+			_store.save_store())
 	if true:
 		var mv: Dictionary = _char().ingame.get("move", {})
 		for dir in ["left", "right", "up", "down"]:
@@ -2665,6 +2670,16 @@ func _process(delta: float) -> void:
 				if not move_idle.is_empty() \
 						and move_idle != _active_rig_path:
 					_crossfade_to_path(move_idle)
+	# Face the cursor: mirror left/right toward the mouse (art faces
+	# LEFT natively). Applied after the movement auto-face, so the
+	# cursor wins when both toggles are on (2026-09-29).
+	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
+			and not _attach_mode \
+			and bool(_char().ingame.get("face_cursor", false)):
+		var face_dx := get_global_mouse_position().x - _ani.global_position.x
+		if absf(face_dx) > 4.0:
+			_ani.scale.x = absf(_ani.scale.x) \
+				* (-1.0 if face_dx > 0.0 else 1.0)
 	# Per-animation cursor aim (Advanced menu): while this clip plays,
 	# its chosen bone tracks the cursor.
 	if not _char_id.is_empty() and not _active_rig_path.is_empty() \
