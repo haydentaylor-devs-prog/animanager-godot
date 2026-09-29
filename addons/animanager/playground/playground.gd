@@ -85,9 +85,6 @@ var _layer_overlay_path := ""
 var _layer_mask_pick: OptionButton
 var _layer_hold := -1.0
 var _layer_hold_secs := 0.0  # auto-release timer; 0 = manual release
-var _aim_enabled := false
-var _aim_weight := 1.0
-var _aim_bone_pick: OptionButton
 
 # In-game mode state
 var _assigning_idle := false
@@ -1220,18 +1217,6 @@ func _build_layering_menu() -> void:
 		_rebuild_content())
 	_btn_into(_content, "Release hold", func() -> void: _ani.release_layer_hold())
 	_btn_into(_content, "Stop layer", func() -> void: _ani.stop_layer(0.1))
-	var sep := HSeparator.new()
-	_content.add_child(sep)
-	_aim_bone_pick = OptionButton.new()
-	_content.add_child(_aim_bone_pick)
-	_fill_bone_pick(_aim_bone_pick, "arm upper")
-	_toggle_into(_content, "Aim bone at mouse cursor", _aim_enabled,
-		func(v: bool) -> void:
-			_aim_enabled = v
-			if not v and _ani != null:
-				_ani.clear_all_aims())
-	_slider_into(_content, "Aim weight", 0.0, 1.0, _aim_weight,
-		func(v: float) -> void: _aim_weight = v)
 
 
 func _play_layer_test(record: bool) -> void:
@@ -1529,9 +1514,8 @@ func _build_event_editor(ev_name: String) -> void:
 
 
 func _fx_direction(spawn_global: Vector2) -> Vector2:
-	var cursor_aim := _aim_enabled
-	if not cursor_aim and not _char_id.is_empty() \
-			and not _active_rig_path.is_empty():
+	var cursor_aim := false
+	if not _char_id.is_empty() and not _active_rig_path.is_empty():
 		cursor_aim = bool(
 			_release_policy(_active_rig_path).get("fx_aim", false))
 	if cursor_aim:
@@ -2616,18 +2600,9 @@ func _process(delta: float) -> void:
 				if not move_idle.is_empty() \
 						and move_idle != _active_rig_path:
 					_crossfade_to_path(move_idle)
-	# Cursor aim.
-	if _aim_enabled and _ani.rig != null and _aim_bone_pick != null \
-			and _aim_bone_pick.selected >= 0:
-		var aim_bone := _aim_bone_pick.get_item_text(_aim_bone_pick.selected)
-		var origin: Vector2 = _ani.get_bone_world_transform(aim_bone).origin
-		var local_target := _ani.to_local(get_global_mouse_position())
-		_ani.set_bone_aim(
-			aim_bone, (local_target - origin).angle(), _aim_weight)
 	# Per-animation cursor aim (Advanced menu): while this clip plays,
-	# its chosen bone tracks the cursor. The Layering menu's manual
-	# aim toggle overrides while enabled (explicit test tool).
-	elif not _char_id.is_empty() and not _active_rig_path.is_empty() \
+	# its chosen bone tracks the cursor.
+	if not _char_id.is_empty() and not _active_rig_path.is_empty() \
 			and _ani.rig != null:
 		var arel := _release_policy(_active_rig_path)
 		var abone := String(arel.get("aim_bone", ""))
