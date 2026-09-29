@@ -771,6 +771,14 @@ func _build_movement_section() -> void:
 		func(v: bool) -> void:
 			_char().ingame.face_cursor = v
 			_store.save_store())
+	# Facing assumes art drawn facing LEFT; rigs drawn facing RIGHT
+	# (or exported pre-mirrored) come out inverted - this flips both
+	# the cursor-facing and the movement auto-face (2026-09-29).
+	_toggle_into(box, "Swap facing direction",
+		bool(_char().ingame.get("face_swap", false)),
+		func(v: bool) -> void:
+			_char().ingame.face_swap = v
+			_store.save_store())
 	if true:
 		var mv: Dictionary = _char().ingame.get("move", {})
 		for dir in ["left", "right", "up", "down"]:
@@ -1950,6 +1958,12 @@ func _input(event: InputEvent) -> void:
 			_release_held_bind()
 
 
+## -1 when the character's "Swap facing direction" toggle is on
+## (art drawn facing right instead of the default left), else 1.
+func _face_sign() -> float:
+	return -1.0 if bool(_char().ingame.get("face_swap", false)) else 1.0
+
+
 ## First animation flagged (Advanced menu) for ANY of the held
 ## movement directions; "" when none matches.
 func _movement_anim_for(held: Array) -> String:
@@ -2659,7 +2673,7 @@ func _process(delta: float) -> void:
 				* (DRAG_MAX_DEFLECT * DRAG_SPEED_PER_PX) * delta
 			if dv.x != 0.0 and bool(_char().ingame.get("face_move", true)):
 				_ani.scale.x = absf(_ani.scale.x) \
-					* (-1.0 if dv.x > 0.0 else 1.0)
+					* (-1.0 if dv.x > 0.0 else 1.0) * _face_sign()
 		if not attack_busy:
 			if not move_anim.is_empty() and move_anim != _active_rig_path:
 				_moving_via_anim = true
@@ -2679,7 +2693,7 @@ func _process(delta: float) -> void:
 		var face_dx := get_global_mouse_position().x - _ani.global_position.x
 		if absf(face_dx) > 4.0:
 			_ani.scale.x = absf(_ani.scale.x) \
-				* (-1.0 if face_dx > 0.0 else 1.0)
+				* (-1.0 if face_dx > 0.0 else 1.0) * _face_sign()
 	# Per-animation cursor aim (Advanced menu): while this clip plays,
 	# its chosen bone tracks the cursor.
 	if not _char_id.is_empty() and not _active_rig_path.is_empty() \
