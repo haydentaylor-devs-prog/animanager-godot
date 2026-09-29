@@ -2414,6 +2414,26 @@ func _save_attachment() -> void:
 	else:
 		var hand2 := _weapon_hand2_grip(bone2)
 		target.rot = _weapon.rotation - (hand2 - _weapon.position).angle()
+	# Two-hand steady follows steady2_deg, not rot - a save used to
+	# leave the stale captured angle in charge and the fitted
+	# rotation was discarded on the spot (2026-09-28). The fit is
+	# now the new steady angle; the hands' ABSOLUTE lock angles are
+	# preserved (offsets rebased), so re-fitting realigns only the
+	# weapon art, never the hands.
+	if bool(target.get("steady2", false)) and not bone2.is_empty():
+		var new_deg := rad_to_deg(_weapon.rotation)
+		if target.has("steady2_deg"):
+			var old_deg := float(target.steady2_deg)
+			target.steady2_h1 = old_deg \
+				+ float(target.get("steady2_h1", 0.0)) - new_deg
+			target.steady2_h2 = old_deg \
+				+ float(target.get("steady2_h2", 0.0)) - new_deg
+		else:
+			target.steady2_h1 = rad_to_deg(
+				_ani.get_bone_world_transform(bone).get_rotation()) - new_deg
+			target.steady2_h2 = rad_to_deg(
+				_ani.get_bone_world_transform(bone2).get_rotation()) - new_deg
+		target.steady2_deg = new_deg
 	target["scale"] = _weapon.scale.x
 	_store.save_store()
 	_attach_set(false)
