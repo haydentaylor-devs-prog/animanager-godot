@@ -124,7 +124,7 @@ var _collapse_state := {}
 # removal or bone change releases it - aims survive rig switches,
 # and a stale one left Herald's hand twisted 180 deg permanently
 # (2026-09-28).
-var _steady_bone_last := ""
+var _steady_bones_last := []
 var _grip_off := Vector2.ZERO
 var _grip_rot := 0.0
 var _events_editor_built := false
@@ -354,7 +354,7 @@ func _enter_character(id: String) -> void:
 	_screen = Screen.SANDBOX
 	_scrub_paused = false
 	_moving_via_anim = false
-	_steady_bone_last = ""
+	_steady_bones_last = []
 	_active_rig_path = ""
 	_release_edit_path = ""
 	_assigning_idle = false
@@ -1151,6 +1151,35 @@ func _build_weapon_menu() -> void:
 		float(w.get("steady_deg", 0.0)), func(v: float) -> void:
 			_domain_edit("weapon", "steady_deg", v)
 			_apply_domain("weapon"))
+	if not String(w.get("bone2", "")).is_empty():
+		# Two-hand steady (2026-09-28): the hands-line rotation is
+		# only as steady as the animation keeps the hands - jump and
+		# attack clips scissor them and swing the weapon. This locks
+		# the WEAPON at a fixed angle (riding the primary hand's
+		# position) and BOTH hand bones at their captured angles
+		# relative to it, so the grip stays wrapped on the haft.
+		_toggle_into(_content, "Steady two-hand grip (lock weapon + both hands)",
+			bool(w.get("steady2", false)), func(v: bool) -> void:
+				_domain_edit("weapon", "steady2", v)
+				var t2h := _domain_target("weapon")
+				if v and not t2h.has("steady2_deg") and _weapon != null \
+						and _ani != null:
+					# First enable captures the CURRENT weapon angle
+					# and each hand's offset from it - nothing snaps.
+					var wdeg := rad_to_deg(_weapon.rotation)
+					t2h.steady2_deg = wdeg
+					t2h.steady2_h1 = rad_to_deg(_ani.get_bone_world_transform(
+						String(t2h.get("bone", ""))).get_rotation()) - wdeg
+					t2h.steady2_h2 = rad_to_deg(_ani.get_bone_world_transform(
+						String(t2h.get("bone2", ""))).get_rotation()) - wdeg
+					_store.save_store()
+				_apply_domain("weapon")
+				_show_submenu("weapon"))
+		if bool(w.get("steady2", false)):
+			_int_slider_into(_content, "Two-hand angle (deg)", -180.0, 180.0,
+				float(w.get("steady2_deg", 0.0)), func(v: float) -> void:
+					_domain_edit("weapon", "steady2_deg", v)
+					_apply_domain("weapon"))
 	_btn_into(_content, "Save attachment", _save_attachment)
 	_btn_into(_content, "Remove weapon", func() -> void:
 		var t := _domain_target("weapon")
@@ -2224,21 +2253,33 @@ func _apply_domain(domain: String) -> void:
 		"weapon":
 			_apply_weapon(t)
 			var steady_bone := String(t.get("bone", ""))
-			var steady_on: bool = not steady_bone.is_empty() \
-				and bool(t.get("steady", false))
-			# Release a PREVIOUS steady bone explicitly: aims persist
-			# across rig switches, so removing the weapon or picking
-			# a different bone otherwise left the old hand locked at
-			# the captured angle forever.
-			if not _steady_bone_last.is_empty() \
-					and _steady_bone_last != steady_bone:
-				_ani.set_bone_aim(_steady_bone_last, 0.0, 0.0)
-			_steady_bone_last = steady_bone if steady_on else ""
-			if not steady_bone.is_empty():
-				_ani.set_bone_aim(
-					steady_bone,
-					deg_to_rad(float(t.get("steady_deg", 0.0))),
-					1.0 if steady_on else 0.0)
+			var sb2 := String(t.get("bone2", ""))
+			# The active steady locks as [bone, world deg] pairs:
+			# two-hand steady locks BOTH hands relative to the fixed
+			# weapon angle; else the one-hand lock. Anything locked
+			# before but not now is released explicitly - aims
+			# persist across rig switches.
+			var locks := []
+			if bool(t.get("steady2", false)) and not steady_bone.is_empty() \
+					and not sb2.is_empty():
+				var base_deg := float(t.get("steady2_deg", 0.0))
+				locks.append([steady_bone,
+					base_deg + float(t.get("steady2_h1", 0.0))])
+				locks.append([sb2,
+					base_deg + float(t.get("steady2_h2", 0.0))])
+			elif bool(t.get("steady", false)) and not steady_bone.is_empty():
+				locks.append([steady_bone, float(t.get("steady_deg", 0.0))])
+			var lock_names := []
+			for lk in locks:
+				lock_names.append(lk[0])
+			for oldb in _steady_bones_last:
+				if not lock_names.has(oldb):
+					_ani.set_bone_aim(String(oldb), 0.0, 0.0)
+			_steady_bones_last = lock_names
+			for lk in locks:
+				_ani.set_bone_aim(String(lk[0]),
+					deg_to_rad(float(lk[1])), 1.0)
+			if not locks.is_empty() or not _steady_bones_last.is_empty():
 				# Re-evaluate so the (un)locked pose renders THIS
 				# frame instead of one frame late on clip switches.
 				_ani.set_current_frame(_ani.get_current_frame())
@@ -2623,10 +2664,14 @@ func _process(delta: float) -> void:
 			# that arced the weapon's tip around (2026-09-28). A
 			# near-degenerate baseline holds the last angle.
 			var p1 := t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
-			var p2 := _weapon_hand2_grip(wb2)
 			_weapon.position = p1
-			if p1.distance_to(p2) > 2.0:
-				_weapon.rotation = (p2 - p1).angle() + float(w.get("rot", 0))
+			if bool(w.get("steady2", false)):
+				# Two-hand steady: the weapon holds its fixed angle.
+				_weapon.rotation = deg_to_rad(float(w.get("steady2_deg", 0.0)))
+			else:
+				var p2 := _weapon_hand2_grip(wb2)
+				if p1.distance_to(p2) > 2.0:
+					_weapon.rotation = (p2 - p1).angle() + float(w.get("rot", 0))
 		else:
 			_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
 			_weapon.rotation = t.get_rotation() + float(w.get("rot", 0))
