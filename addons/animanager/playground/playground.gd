@@ -2276,6 +2276,20 @@ func _weapon_part_z(bone_name: String) -> int:
 	return -100000
 
 
+## The second hand's grip point: the MIDDLE of its bone (palm
+## center), giving the two-hand rotation a reference that sits on
+## the haft instead of at the wrist joint.
+func _weapon_hand2_grip(bone_name: String) -> Vector2:
+	var t2 := _ani.get_bone_world_transform(bone_name)
+	var blen := 0.0
+	for uuid in _ani._bone_by_uuid:
+		var b: Dictionary = _ani._bone_by_uuid[uuid]
+		if String(b.get("name", "")) == bone_name:
+			blen = float(b.get("length", 0.0))
+			break
+	return t2 * Vector2(blen * 0.5, 0.0)
+
+
 func _apply_weapon_layer() -> void:
 	if _weapon == null:
 		return
@@ -2357,7 +2371,7 @@ func _save_attachment() -> void:
 	if bone2.is_empty():
 		target.rot = _weapon.rotation - t.get_rotation()
 	else:
-		var hand2 := _ani.get_bone_world_transform(bone2).origin
+		var hand2 := _weapon_hand2_grip(bone2)
 		target.rot = _weapon.rotation - (hand2 - _weapon.position).angle()
 	target["scale"] = _weapon.scale.x
 	_store.save_store()
@@ -2601,11 +2615,17 @@ func _process(delta: float) -> void:
 			# Two-handed grip (2026-09-28): anchored at the primary
 			# grip point, rotated along the line to the second hand -
 			# the weapon always lies on the grip axis, which is the
-			# stability between the hands.
+			# stability between the hands. The second reference is
+			# the MIDDLE of that hand's bone (the palm), not its
+			# start joint (the wrist): hands gripping a haft sit
+			# close together, and the short wrist-to-grip baseline
+			# turned walk-cycle hand bobs into wide angle swings
+			# that arced the weapon's tip around (2026-09-28). A
+			# near-degenerate baseline holds the last angle.
 			var p1 := t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
-			var p2: Vector2 = _ani.get_bone_world_transform(wb2).origin
+			var p2 := _weapon_hand2_grip(wb2)
 			_weapon.position = p1
-			if p1.distance_to(p2) > 0.5:
+			if p1.distance_to(p2) > 2.0:
 				_weapon.rotation = (p2 - p1).angle() + float(w.get("rot", 0))
 		else:
 			_weapon.position = t * Vector2(float(w.get("ox", 0)), float(w.get("oy", 0)))
