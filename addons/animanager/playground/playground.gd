@@ -1022,14 +1022,36 @@ func _build_shading_menu() -> void:
 	var s := _domain_target("shading")
 	_toggle_into(_content, "Shaded", bool(s.shaded),
 		func(v: bool) -> void: _domain_edit("shading", "shaded", v))
-	_slider_into(_content, "Metal tint", 0.0, 3.0, float(s.tint),
-		func(v: float) -> void: _domain_edit("shading", "tint", v))
-	_slider_into(_content, "Light X", -1.0, 1.0, float(s.lx),
+	var light_box := _collapsible(_content, "Light", false)
+	_slider_into(light_box, "Light X", -1.0, 1.0, float(s.lx),
 		func(v: float) -> void: _domain_edit("shading", "lx", v))
-	_slider_into(_content, "Light Y", -1.0, 1.0, float(s.ly),
+	_slider_into(light_box, "Light Y", -1.0, 1.0, float(s.ly),
 		func(v: float) -> void: _domain_edit("shading", "ly", v))
-	_slider_into(_content, "Light Z (height depth)", 0.1, 1.5, float(s.lz),
+	_slider_into(light_box, "Light Z (height depth)", 0.1, 1.5, float(s.lz),
 		func(v: float) -> void: _domain_edit("shading", "lz", v))
+	# Per-material parameters (2026-09-29). Live: every slider goes
+	# through _apply_domain, so the look updates as you drag.
+	var metal_box := _collapsible(_content, "Metal", true)
+	_slider_into(metal_box, "Metalness (mask strength)", 0.0, 1.0,
+		float(s.get("metal", 1.0)),
+		func(v: float) -> void: _domain_edit("shading", "metal", v))
+	_slider_into(metal_box, "Metal tint", 0.0, 3.0, float(s.tint),
+		func(v: float) -> void: _domain_edit("shading", "tint", v))
+	var lit_box := _collapsible(_content, "Lit", true)
+	_slider_into(lit_box, "Diffuse wrap (0 hard - 1 shadowless)",
+		0.0, 1.0, float(s.get("wrap", 0.4)),
+		func(v: float) -> void: _domain_edit("shading", "wrap", v))
+	var em_box := _collapsible(_content, "Emissive", true)
+	_slider_into(em_box, "Emissive energy", 0.0, 4.0,
+		float(s.get("em", 1.2)),
+		func(v: float) -> void: _domain_edit("shading", "em", v))
+	var rim_box := _collapsible(_content, "Rim light", true)
+	_slider_into(rim_box, "Rim strength", 0.0, 2.0,
+		float(s.get("rim_s", 0.7)),
+		func(v: float) -> void: _domain_edit("shading", "rim_s", v))
+	_slider_into(rim_box, "Rim tightness", 1.0, 8.0,
+		float(s.get("rim_p", 3.0)),
+		func(v: float) -> void: _domain_edit("shading", "rim_p", v))
 	_btn_into(_content, "Reset shading to defaults", func() -> void:
 		var t := _domain_target("shading")
 		t.clear()
@@ -2258,6 +2280,11 @@ func _apply_domain(domain: String) -> void:
 		"shading":
 			_ani.shaded = bool(t.shaded)
 			_ani.metal_tint = float(t.tint)
+			_ani.metalness = float(t.get("metal", 1.0))
+			_ani.diffuse_wrap = float(t.get("wrap", 0.4))
+			_ani.emissive_energy = float(t.get("em", 1.2))
+			_ani.rim_strength = float(t.get("rim_s", 0.7))
+			_ani.rim_power = float(t.get("rim_p", 3.0))
 			_ani.light_direction = Vector3(
 				float(t.lx), float(t.ly), float(t.lz))
 		"weapon":

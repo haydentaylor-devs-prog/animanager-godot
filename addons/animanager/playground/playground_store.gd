@@ -41,7 +41,10 @@ static func default_physics() -> Dictionary:
 
 
 static func default_shading() -> Dictionary:
-	return {"shaded": true, "tint": 2.0, "lx": 0.35, "ly": -0.55, "lz": 0.75}
+	return {
+		"shaded": true, "tint": 2.0, "lx": 0.35, "ly": -0.55, "lz": 0.75,
+		"metal": 1.0, "wrap": 0.4, "em": 1.2, "rim_s": 0.7, "rim_p": 3.0,
+	}
 
 
 static func default_playback() -> Dictionary:

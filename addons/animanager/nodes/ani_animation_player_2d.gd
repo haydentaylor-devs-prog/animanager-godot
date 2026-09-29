@@ -99,6 +99,37 @@ signal layer_finished
 		metal_tint = value
 		_apply_shading_uniforms()
 
+# Remaining per-material shader parameters (2026-09-29): they always
+# existed as shader uniforms but sat frozen at their defaults - now
+# runtime-tunable like metal_tint. Defaults mirror the shader's.
+@export_range(0.0, 1.0) var metalness: float = 1.0:
+	set(value):
+		metalness = value
+		_apply_shading_uniforms()
+
+# Half-lambert wrap for the Lit bucket: 0 = hard daylight falloff,
+# 1 = fully wrapped (no shadow side).
+@export_range(0.0, 1.0) var diffuse_wrap: float = 0.4:
+	set(value):
+		diffuse_wrap = value
+		_apply_shading_uniforms()
+
+@export_range(0.0, 4.0) var emissive_energy: float = 1.2:
+	set(value):
+		emissive_energy = value
+		_apply_shading_uniforms()
+
+# Rim light on shaded (metal/lit) silhouettes.
+@export_range(0.0, 2.0) var rim_strength: float = 0.7:
+	set(value):
+		rim_strength = value
+		_apply_shading_uniforms()
+
+@export_range(1.0, 8.0) var rim_power: float = 3.0:
+	set(value):
+		rim_power = value
+		_apply_shading_uniforms()
+
 @export_group("Cloth")
 
 # Secondary motion for cloth bones (capes, loincloths, tassels):
@@ -1170,6 +1201,11 @@ func _apply_shading_uniforms() -> void:
 		mat.set_shader_parameter("matcap", cap)
 		mat.set_shader_parameter("light_dir", light_direction)
 		mat.set_shader_parameter("metal_tint", metal_tint)
+		mat.set_shader_parameter("metalness", metalness)
+		mat.set_shader_parameter("diffuse_wrap", diffuse_wrap)
+		mat.set_shader_parameter("emissive_energy", emissive_energy)
+		mat.set_shader_parameter("rim_strength", rim_strength)
+		mat.set_shader_parameter("rim_power", rim_power)
 
 
 func _shade_textures_for_bone(bone: Dictionary) -> Dictionary:
