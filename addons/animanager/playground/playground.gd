@@ -1977,6 +1977,18 @@ func _bind_down(bind_name: String) -> bool:
 ## or past the chosen frame (an attack-commit point).
 ## Playback-tunable crossfade length for every playground clip
 ## switch (sandbox activation and all in-game transitions).
+## Fade for a switch INTO [res]. A crossfade overlaps the incoming
+## clip's runtime (its playhead advances during the blend), so a
+## fade longer than the clip eats it alive - an 8-frame attack under
+## a 400ms fade was mostly blend and read as "cut off at 6 frames"
+## (2026-09-29). Cap at a third of the incoming clip's duration;
+## long loops (idle/run) still get the full Playback setting.
+func _fade_for(res: AniRigResource) -> float:
+	var cap: float = (float(res.total_frames)
+		/ maxf(float(res.frame_rate), 1.0)) / 3.0
+	return minf(_fade_sec(), maxf(cap, 0.05))
+
+
 func _fade_sec() -> float:
 	return maxf(0.05, float(_char().playback.get("fade_ms", 350)) / 1000.0)
 
@@ -2202,7 +2214,7 @@ func _crossfade_to_path(path: String) -> void:
 	# Scrub-hold: hard-cut (a fade would freeze mid-blend showing
 	# the OLD pose) and park on frame 0 - speed stays 0 via
 	# _apply_playback, so frame-0 events still fire.
-	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
+	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_for(res))
 	_ani.loop_override = 1
 	_active_rig_path = path
 	_apply_all_domains()
@@ -2240,7 +2252,7 @@ func _activate_rig(path: String) -> void:
 	# falls back to a cut when there is nothing to fade from). The
 	# loop override is set AFTER the fade capture, so the OUTGOING
 	# clip keeps its own effective looping through the blend.
-	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_sec())
+	_ani.crossfade_to(res, 0.0 if _scrub_paused else _fade_for(res))
 	_ani.loop_override = 1
 	_apply_all_domains()
 	_apply_playback()
