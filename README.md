@@ -5,7 +5,7 @@
 
 **2D skeletal animation runtime for Godot 4** — the game-engine half
 of a tablet-to-game pipeline. Characters are drawn, rigged, and
-animated in AniMate
+animated in [AniMate](https://animate.htdevs.net/)
 (a mobile animation studio for iPad / Android tablets); this plugin
 imports the exported `.animrig` files and plays them back with
 runtime features the authoring app doesn't need to know about:
