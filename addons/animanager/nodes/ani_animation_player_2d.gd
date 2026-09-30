@@ -565,6 +565,11 @@ func has_layer() -> bool:
 	return _layer_rig != null
 
 
+## The overlay playhead's frame, or -1 when no layer is active.
+func get_layer_frame() -> float:
+	return _layer_frame if _layer_rig != null else -1.0
+
+
 func _clear_layer() -> void:
 	_layer_rig = null
 	_layer_frames_by_bone.clear()

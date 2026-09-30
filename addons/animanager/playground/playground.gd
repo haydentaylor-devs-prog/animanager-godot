@@ -112,6 +112,16 @@ var _grip_released := ""
 # Time spent parked on the hold frame by a held bind - drives the
 # charged-release branch.
 var _hold_elapsed := 0.0
+# Bind-triggered LAYERED attack (2026-09-30): a saved Animation
+# Layering pair turns the overlay's bind into an upper-body layer
+# over the running base instead of a full-body clip switch. Path of
+# the overlay in flight ("" = none), its mask, time parked on its
+# hold frame (drives the charged branch), and a token that voids
+# stale timed-hold timers.
+var _layer_bind_path := ""
+var _layer_bind_mask := ""
+var _layer_hold_t := 0.0
+var _layer_timer_token := 0
 # True while a direction-flagged movement animation drove the clip
 # switch - releasing the directions then returns to the idle.
 var _moving_via_anim := false
@@ -1273,6 +1283,45 @@ func _build_layering_menu() -> void:
 		_rebuild_content())
 	_btn_into(_content, "Release hold", func() -> void: _ani.release_layer_hold())
 	_btn_into(_content, "Stop layer", func() -> void: _ani.stop_layer(0.1))
+	# Saved pairs (2026-09-30): while a pair's base is the active
+	# clip, the overlay's key/mouse bind plays it as a layer instead
+	# of switching the whole body. Listed here so they can be removed.
+	_content.add_child(HSeparator.new())
+	_caption_into(_content, "Saved pairs (the overlay's bind layers it over the base):")
+	var pairs: Array = _char().get("layers", [])
+	if pairs.is_empty():
+		var none := Label.new()
+		none.text = "None yet. Pick an overlay above, then Save layering."
+		none.modulate = Color(1, 1, 1, 0.6)
+		none.add_theme_font_size_override("font_size", 12)
+		_content.add_child(none)
+	for l in pairs:
+		var base_path := String(l.base)
+		var ov_path := String(l.overlay)
+		var row := HBoxContainer.new()
+		var lbl := Label.new()
+		lbl.text = "%s over %s  [%s]" % [_rig_display_name(ov_path),
+			_rig_display_name(base_path), String(l.mask)]
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		lbl.add_theme_font_size_override("font_size", 12)
+		row.add_child(lbl)
+		var rm := Button.new()
+		rm.text = "Remove"
+		rm.pressed.connect(func() -> void:
+			_store.remove_layer(_char_id, base_path, ov_path)
+			_show_submenu("layering"))
+		row.add_child(rm)
+		_content.add_child(row)
+
+
+## A rig's user-facing name (renames included), falling back to its
+## file name.
+func _rig_display_name(path: String) -> String:
+	var entry := _store.rig_entry(_char_id, path)
+	if not entry.is_empty():
+		return String(entry.name)
+	return path.get_file().get_basename()
 
 
 func _play_layer_test(record: bool) -> void:
@@ -1578,7 +1627,7 @@ func _fx_direction(spawn_global: Vector2) -> Vector2:
 	var cursor_aim := false
 	if not _char_id.is_empty() and not _active_rig_path.is_empty():
 		cursor_aim = bool(
-			_release_policy(_active_rig_path).get("fx_aim", false))
+			_release_policy(_attack_policy_path()).get("fx_aim", false))
 	if cursor_aim:
 		var d := get_global_mouse_position() - spawn_global
 		if d.length() > 1.0:
@@ -1911,8 +1960,7 @@ func _input(event: InputEvent) -> void:
 		if mb.pressed and not over_ui and not _anim_committed():
 			for rig_path in mbinds:
 				if mbinds[rig_path] == mname:
-					_held_bind_key = mname
-					_crossfade_to_path(rig_path)
+					_trigger_bind(rig_path, mname)
 					return
 		elif not mb.pressed and _held_bind_key == mname:
 			# Releases count even over the panel, so a clip can't
@@ -1948,8 +1996,7 @@ func _input(event: InputEvent) -> void:
 			return
 		for rig_path in binds:
 			if binds[rig_path] == pressed_name:
-				_held_bind_key = pressed_name
-				_crossfade_to_path(rig_path)
+				_trigger_bind(rig_path, pressed_name)
 				return
 	else:
 		var released_plain := OS.get_keycode_string(key_event.keycode)
@@ -2156,10 +2203,10 @@ func _build_release_editor() -> void:
 ## Only in-flight clips lock (a held input or a playing release
 ## tail) - the idle loop never does - and scrub-hold bypasses it.
 func _anim_committed() -> bool:
-	if _ani == null or _ani.rig == null or _active_rig_path.is_empty():
+	if _ani == null or _ani.rig == null or _active_rig_path.is_empty() 			or _scrub_paused:
 		return false
-	if _scrub_paused:
-		return false
+	if not _layer_bind_path.is_empty() and _ani.has_layer():
+		return _layer_committed()
 	if _held_bind_key.is_empty() and not _ig_release_pending:
 		return false
 	var rel := _release_policy(_active_rig_path)
@@ -2171,6 +2218,16 @@ func _anim_committed() -> bool:
 	return false
 
 
+## _anim_committed for a layered attack in flight: the same release
+## policy, read against the overlay playhead.
+func _layer_committed() -> bool:
+	var lrel := _release_policy(_layer_bind_path)
+	var mode := String(lrel.get("mode", "complete"))
+	if mode == "cutoff":
+		return _ani.get_layer_frame() >= float(lrel.get("frame", 0))
+	return mode == "complete"
+
+
 func _release_held_bind() -> void:
 	_held_bind_key = ""
 	if _ani == null:
@@ -2180,6 +2237,9 @@ func _release_held_bind() -> void:
 		# clip stays parked for frame stepping. Cut-on-release
 		# policies made bind-triggered clips impossible to scrub
 		# (the release yanked them to idle, 2026-09-28).
+		return
+	if not _layer_bind_path.is_empty():
+		_release_bind_layer()
 		return
 	var rel := _release_policy(_active_rig_path)
 	# Charged-release branch: released from the hold park after the
@@ -2219,14 +2279,128 @@ func _release_held_bind() -> void:
 		_crossfade_to_path(idle)
 
 
+## A bound input was pressed for [rig_path]. With a saved Animation
+## Layering pair (the active clip as base, [rig_path] as overlay)
+## the clip plays as a layer over the running base - the idle keeps
+## breathing under the attack. Otherwise it's a full-body switch.
+func _trigger_bind(rig_path: String, key: String) -> void:
+	_held_bind_key = key
+	var pair := _layer_pair_for(rig_path)
+	if not pair.is_empty() and _play_bind_layer(rig_path, String(pair.mask)):
+		return
+	_crossfade_to_path(rig_path)
+
+
+## The saved pair with the ACTIVE clip as base and [overlay_path] as
+## overlay ({} when none). The most recent save wins.
+func _layer_pair_for(overlay_path: String) -> Dictionary:
+	if overlay_path == _active_rig_path:
+		return {}
+	var found := {}
+	for l in _store.layers_of_base(_char_id, _active_rig_path):
+		if String(l.overlay) == overlay_path:
+			found = l
+	return found
+
+
+## Start (or retrigger) [path] as the bind's layer. Applies the
+## clip's Advanced hold settings to the overlay playhead: a timed
+## hold parks for the set seconds, an infinite hold parks until the
+## input is released. False when the mask names no bone in the rig.
+func _play_bind_layer(path: String, mask: String) -> bool:
+	var ov := _load_rig_res(path)
+	if ov == null or not _ani.play_layer(ov, mask, _fade_for(ov)):
+		return false
+	_layer_bind_path = path
+	_layer_bind_mask = mask
+	_layer_hold_t = 0.0
+	_layer_timer_token += 1
+	var rel := _release_policy(path)
+	var hold_f := float(rel.get("hold_frame", -1))
+	if hold_f >= 0.0:
+		_ani.set_layer_hold(hold_f)
+		var secs := float(rel.get("hold_secs", 1.0))
+		if secs >= 0.0:
+			var token := _layer_timer_token
+			var node := _ani
+			get_tree().create_timer(maxf(0.1, secs)).timeout.connect(
+				func() -> void:
+					if token == _layer_timer_token \
+							and is_instance_valid(node) and node == _ani:
+						node.release_layer_hold())
+	return true
+
+
+## Release of a layered bind: same policies as a full-body clip,
+## applied to the overlay playhead. The base never stopped, so there
+## is no return-to-idle crossfade - the layer fades itself out.
+func _release_bind_layer() -> void:
+	var rel := _release_policy(_layer_bind_path)
+	var hold_f := float(rel.get("hold_frame", -1))
+	var parked: bool = hold_f >= 0.0 \
+		and float(rel.get("hold_secs", 1.0)) < 0.0 \
+		and _ani.get_layer_frame() >= hold_f
+	var charge_clip := String(rel.get("charge_clip", ""))
+	if parked and not charge_clip.is_empty() \
+			and _layer_hold_t * 1000.0 >= float(rel.get("charge_ms", 500)):
+		var cc := _load_rig_res(charge_clip)
+		if cc != null and _ani.play_layer(cc, _layer_bind_mask, _fade_for(cc)):
+			# The charged branch plays through as the release.
+			_layer_bind_path = charge_clip
+			_layer_timer_token += 1
+			return
+	var complete := true
+	match String(rel.get("mode", "complete")):
+		"cut":
+			complete = false
+		"cutoff":
+			complete = _ani.get_layer_frame() >= float(rel.get("frame", 0))
+	if complete:
+		_ani.release_layer_hold()
+		return
+	# Cutting skips the events that would end effects.
+	_beam_off()
+	_loops_off()
+	_ani.stop_layer(0.1)
+	_layer_bind_path = ""
+
+
+## Per-frame upkeep for a layered bind: charge time on the hold
+## frame, and the end of the layer - which retriggers it while the
+## input is still held (a held bind repeats, like a full-body clip).
+func _process_bind_layer(delta: float) -> void:
+	if _layer_bind_path.is_empty():
+		return
+	if not _ani.has_layer():
+		var path := _layer_bind_path
+		_layer_bind_path = ""
+		if not _held_bind_key.is_empty() and not _scrub_paused:
+			_play_bind_layer(path, _layer_bind_mask)
+		return
+	var hold_f := float(_release_policy(_layer_bind_path).get("hold_frame", -1))
+	if not _held_bind_key.is_empty() and hold_f >= 0.0 \
+			and _ani.get_layer_frame() >= hold_f:
+		_layer_hold_t += delta
+
+
+## Whose Advanced settings (cursor aim, effect aim) apply right now:
+## the layered attack while one is in flight, else the active clip.
+func _attack_policy_path() -> String:
+	if not _layer_bind_path.is_empty():
+		return _layer_bind_path
+	return _active_rig_path
+
+
 func _crossfade_to_path(path: String) -> void:
 	var res := _load_rig_res(path)
 	if res == null:
 		return
 	# Any clip switch cancels hold/pending state (a re-press during
 	# the pending window keeps its fresh clip instead of idling).
+	# Assigning a new base also clears the runtime's layer.
 	_ig_parked = false
 	_ig_release_pending = false
+	_layer_bind_path = ""
 	if _ani.rig == null:
 		_activate_rig(path)
 		return
@@ -2264,6 +2438,7 @@ func _activate_rig(path: String) -> void:
 	_ig_release_pending = false
 	_grip_released = ""
 	_hold_elapsed = 0.0
+	_layer_bind_path = ""
 	# One-time adoption of a weapon fitting saved by the pre-rework
 	# playground (keyed by root-bone uuid) into this character.
 	_store.adopt_legacy_weapon(_char_id, res)
@@ -2275,14 +2450,9 @@ func _activate_rig(path: String) -> void:
 	_ani.loop_override = 1
 	_apply_all_domains()
 	_apply_playback()
-	# Auto-play the recorded layering for this base (runtime supports
-	# one overlay at a time - the most recent pair plays).
-	var overlays := _store.layers_of_base(_char_id, path)
-	if not overlays.is_empty() and _screen == Screen.SANDBOX:
-		var l: Dictionary = overlays[overlays.size() - 1]
-		var ov := _load_rig_res(String(l.overlay))
-		if ov != null:
-			_ani.play_layer(ov, String(l.mask), 0.12)
+	# Saved layering pairs no longer auto-play here (2026-09-30):
+	# selecting the idle fired the attack overlay by itself. A pair
+	# now changes what the overlay's BIND does - see _trigger_bind.
 
 
 func _apply_all_domains() -> void:
@@ -2612,8 +2782,11 @@ func _process(delta: float) -> void:
 	# hold frame (-1 = off) until released; the release resumes the
 	# clip first so the events past the hold (beam_end) fire, then
 	# _process idles once the clip reaches its final frame.
+	# (Layered binds are handled by _process_bind_layer instead - the
+	# base keeps running under them.)
+	_process_bind_layer(delta)
 	if _screen == Screen.SANDBOX and not _char_id.is_empty() \
-			and not _active_rig_path.is_empty():
+			and not _active_rig_path.is_empty() and _layer_bind_path.is_empty():
 		var ig_rel := _release_policy(_active_rig_path)
 		var ig_hold := int(ig_rel.get("hold_frame", -1))
 		var at_hold: bool = ig_hold >= 0 and int(_ani.get_current_frame()) == ig_hold
@@ -2665,8 +2838,11 @@ func _process(delta: float) -> void:
 		var move_anim := ""
 		if not held_dirs.is_empty():
 			move_anim = _movement_anim_for(held_dirs)
+		# A layered attack also counts: swapping the base clip mid-
+		# attack would clear the runtime layer and cut the attack off.
 		var attack_busy: bool = not _held_bind_key.is_empty() \
-			or _ig_release_pending
+			or _ig_release_pending \
+			or (not _layer_bind_path.is_empty() and _ani.has_layer())
 		if dv != Vector2.ZERO and (not move_anim.is_empty() \
 				or bool(_char().ingame.get("move_enabled", false))):
 			_ani.position += dv.normalized() \
@@ -2698,7 +2874,7 @@ func _process(delta: float) -> void:
 	# its chosen bone tracks the cursor.
 	if not _char_id.is_empty() and not _active_rig_path.is_empty() \
 			and _ani.rig != null:
-		var arel := _release_policy(_active_rig_path)
+		var arel := _release_policy(_attack_policy_path())
 		var abone := String(arel.get("aim_bone", ""))
 		var aiming: bool = bool(arel.get("aim_enabled", false)) \
 			and not abone.is_empty()

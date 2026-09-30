@@ -147,6 +147,13 @@ func effective(id: String, rig_path: String, domain: String) -> Dictionary:
 ## first group number but display as 'L' (UI concern).
 func add_layer(id: String, base_path: String, overlay_path: String, mask: String) -> int:
 	var c := character(id)
+	# Re-saving an existing pair updates its mask instead of stacking
+	# a duplicate entry (each save used to append another copy).
+	for l in c.layers:
+		if l.base == base_path and l.overlay == overlay_path:
+			l.mask = mask
+			save_store()
+			return int(l.group)
 	var group: int = c.next_group
 	c.next_group += 1
 	c.layers.append({
@@ -160,6 +167,26 @@ func add_layer(id: String, base_path: String, overlay_path: String, mask: String
 			r.group = group
 	save_store()
 	return group
+
+
+## Delete a saved base+overlay pair and recompute the rig-row group
+## numbers from the pairs that remain.
+func remove_layer(id: String, base_path: String, overlay_path: String) -> void:
+	var c := character(id)
+	var kept := []
+	for l in c.layers:
+		if not (l.base == base_path and l.overlay == overlay_path):
+			kept.append(l)
+	c.layers = kept
+	for r in c.rigs:
+		r.group = 0
+	for l in kept:
+		for r in c.rigs:
+			if r.path == l.overlay:
+				r.group = l.group
+			elif r.path == l.base and int(r.group) == 0:
+				r.group = l.group
+	save_store()
 
 
 func layers_of_base(id: String, base_path: String) -> Array:
