@@ -20,6 +20,39 @@ shot is ABOUT the panel.
 | `playground.png` | Full-window screenshot: character mid-sway, weapon attached, tuning panel visible with a couple of sections collapsed (shows the fold feature). | Playground | still |
 | `import_drop.gif` | Godot editor: drag an `.animrig` into the FileSystem dock, click the imported resource, show it assigned on an AniAnimationPlayer2D, press play — character animates. | Godot editor | 5–8 s |
 
+## Combat sandbox reel
+
+These four go in the README's "The playground: a combat sandbox"
+section. They all use your saved playground characters, whose
+binds and event effects are already set up (checked against
+`animate_playground.json` on 2026-09-30). Record at a zoom where
+the effects fit in the frame. A beam needs horizontal room, so
+these can be wider (~800 px).
+
+| File | What to capture | Setup already saved | Length |
+|---|---|---|---|
+| `events_effects.gif` | **Seraph**: hold RMB with the cursor off to one side. The charge swirl spins on the staff tip, then the beam fires toward the cursor. Sweep the cursor a little while it fires, then release so the beam ends. If there's time, finish with one LMB fireball flying at the cursor. | RMB = secondaryAttack (loop on `beam_charge_start`, beam on `beam_start`/`beam_end`, effects aim at the cursor). LMB = basicAttack (fireball loop, then projectile on `fireball_shot`). | 5–8 s |
+| `charged_attack.gif` | **Herald**: one quick TAP of the attack bind (the whole strike plays), a beat of idle, then a long HOLD (parks on the charge pose) and a release. See the note below about the charged branch. | basicAttack: Hold at frame 2, Hold seconds -1 (hold forever), policy Complete. | 4–6 s |
+| `two_hand_grip.gif` | **Herald** with HeraldWeapon: idle, then run and attack. The weapon stays between both hands through the swing. Turn on **Steady two-hand grip** in the Weapon Menu first if the arms scissor during the attack. | Weapon on Left Hand Bone with a second hand set. | 4–6 s |
+| `playable_test.gif` | **Herald**: hold A, then D. He runs and turns to face each way, then returns to idle when you let go. Attack once while running. If you like, cut to **Seraph** strafing with WASD while facing the cursor and firing fireballs at it. | Herald: run marked as the Left/Right movement animation. Seraph: WASD, Face the cursor, Swap facing. | 6–8 s |
+
+**Charged branch note:** the feature where a long hold plays a
+*different* animation needs a second attack clip. Set it in the
+clip's **Advanced → "Charged release plays instead"** together with
+a **Charge threshold (ms)**. Herald only has `basicAttack` so far.
+Until you export a second attack clip, capture tap vs. hold
+(strike vs. held charge pose, then the strike on release). The
+README text still fits either way, and you can re-record once the
+second clip exists.
+
+Before recording the two Herald shots, check that Herald's
+character still loads. The Sep 28 re-export replaced `attack`
+with `basicAttack` and removed the dodge and run-backward clips.
+The playground stores clips by path, and the saved paths already
+point at the new files, so it should load fine.
+
+## Optional extras
+
 Optional extras (no README slot yet — nice for the repo or the
 Upwork gallery):
 

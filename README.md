@@ -40,9 +40,11 @@ lighting.
 
 - **Body layering** — play a second clip on a bone *subtree* while
   the base clip keeps the rest: run with the legs, attack with the
-  upper body (`play_layer`). Faded enter/exit, overlay hit-events
-  fire mid-run, and a charge-hold can park the overlay on a casting
-  pose until released (`set_layer_hold`).
+  upper body (`play_layer`). The mask can name several subtree
+  roots (`"Right Arm Upper Bone, Left Arm Upper Bone, Neck Bone"`)
+  for rigs whose torso *is* the root. Faded enter/exit, overlay
+  hit-events fire mid-run, and a charge-hold can park the overlay
+  on a casting pose until released (`set_layer_hold`).
 
   ![Attack playing on the upper body while the legs keep running](docs/media/body_layering.gif)
 
@@ -66,20 +68,78 @@ lighting.
   authoring app render through per-part shaders: metal picks up a
   matcap reflection, lit pixels get normal-mapped diffuse from a
   movable light, emissive glows, unpainted parts stay exactly as
-  drawn. Flat pixel art that responds to scene lighting.
+  drawn. Each material class has its own controls (metalness and
+  tint, diffuse wrap, emissive energy, rim light). Flat pixel art
+  that responds to scene lighting.
 
   ![Light direction sweeping across height-mapped armor](docs/media/shaded_mode.gif)
 
-**The tuning playground**
-An included scene (`addons/animanager/playground/playground.tscn`,
-run with F6) for dialing all of it in without a game around it:
-load any rig, excite the physics with an on-screen joystick,
-tune every parameter with live sliders, save named presets, fit a
-weapon to a hand bone visually (saved bone-relative, so it follows
-every clip), and test layered attacks + cursor aiming against the
-mouse.
+---
+
+## The playground: a combat sandbox
+
+An included scene (`addons/animanager/playground/playground.tscn`;
+run it with F6 or from **Project → Tools → AniMate Playground**)
+for dialing all of it in without a game around it. Create a
+character from its clips, excite the physics with an on-screen
+joystick, and tune every parameter with live sliders. Settings can
+be shared across a character's animations or overridden for one
+clip, and full snapshots save as named presets.
 
 ![The playground: character, joystick, and the full tuning panel](docs/media/playground.png)
+
+It started as a tuning panel and grew into a place to prototype
+**game feel**. You can bind a character's clips to keys and play
+them, with effects, weapons and aiming, before any gameplay code
+exists. Everything it does goes through the node's public API
+(`animation_event`, `crossfade_to`, `set_bone_aim`, `play_layer`,
+`get_bone_world_transform`), which is the same API a game ships
+with.
+
+**Frame events become effects.** Events placed on the AniMate
+timeline show up in the playground automatically, grouped by clip
+and frame. Bind one to an effect with no code:
+
+- **Projectiles:** flipbook spritesheets that launch along the
+  facing or toward the cursor.
+- **Bursts:** muzzle-flash style one-shots.
+- **Beams:** anchored to a bone, grow gradually, and end on a
+  paired event.
+- **Charge-up loops:** follow a bone until a stop event kills them.
+
+Anchors are bone-local, so an effect placed at a staff's tip stays
+on the tip through the swing.
+
+![A charge-up swirl on the staff tip becomes a beam aimed at the cursor](docs/media/events_effects.gif)
+
+**Hold-to-charge attacks.** A held input parks the clip on a hold
+frame. On release it plays the clip's tail. If the hold passes a
+charge threshold, a *different* animation plays instead, so one
+button gives a quick strike on a tap and a charged release on a
+hold. Each clip has a release policy (complete, cut to idle, or
+commit past a cutoff frame), and a committed attack blocks new
+inputs until it lands.
+
+![Tap for a quick strike, hold for a charged release](docs/media/charged_attack.gif)
+
+**Two-handed weapons.** A weapon fitted to one hand takes its
+rotation from the line between both hands, so it always sits
+between them. A steady-grip lock holds the weapon and both hands
+together when a clip scissors the arms. Frame events can take one
+hand off the grip mid-swing (`weapon_release`) and put it back
+(`weapon_engage`) without the weapon jumping.
+
+![A two-handed weapon staying in both hands through a swing, then one hand letting go](docs/media/two_hand_grip.gif)
+
+**A playable test in minutes.** Bind keys or mouse buttons to
+clips and mark clips as movement animations. The character runs
+and auto-faces the direction of travel, returns to idle when
+released, and can face the cursor while strafing. Per-clip cursor
+aiming turns an arm (and its projectiles) toward the mouse
+mid-attack. Crossfade length is one slider across every
+transition.
+
+![Running, strafing while facing the cursor, and attacking on keybinds](docs/media/playable_test.gif)
 
 ---
 
@@ -152,6 +212,7 @@ opt legs into the limb class. Name `Skirt Cloth Front` /
 | `auto_play` / `speed` / `loop_override` | Playback control. |
 | `zero_root_translate` | Subtract the frame-0 root offset (for games that move the body themselves). |
 | `shaded` / `matcap` / `light_direction` / `metal_tint` | Shaded-mode rendering. |
+| `metalness` / `diffuse_wrap` / `emissive_energy` / `rim_strength` / `rim_power` | Per-material shading response. |
 | `cloth_*`, `hair_*`, `limb_*` | Physics keywords + stiffness/damping/inertia per material class. |
 | `draw_bones_in_editor` + colors | Debug bone rendering for unbound rigs. |
 
@@ -161,7 +222,7 @@ opt legs into the limb class. Name `Skirt Cloth Front` /
 |---|---|
 | `play()` / `pause()` / `stop()` / `set_current_frame(f)` | Playback. |
 | `crossfade_to(rig, seconds)` | Blend into another clip from the current pose. |
-| `play_layer(rig, mask_root_name, fade)` | Drive a bone subtree from a second clip (attack-while-moving). |
+| `play_layer(rig, mask_roots, fade)` | Drive one or more bone subtrees (comma-separated roots) from a second clip (attack-while-moving). |
 | `set_layer_hold(frame)` / `release_layer_hold()` | Park the overlay on a pose (hold-to-cast). |
 | `stop_layer(fade)` | Cancel the overlay early. |
 | `set_bone_aim(bone, angle, weight)` / `clear_bone_aim(bone)` | Steer a bone toward a direction over its animation. |
@@ -226,7 +287,7 @@ drawn and animated entirely on a tablet in AniMate, exported as
 single-file `.animrig` bundles, and dropped into Godot — where this
 plugin adds the systems that only make sense at runtime (physics
 that react to gameplay, layered attacks, aimed limbs, dynamic
-lighting). A consuming game's test harness keeps 550+ automated
+lighting). A consuming game's test harness keeps 570+ automated
 checks over the importer, evaluator, IK, cross-fade, layering and
 physics, so the format spec, the exporter, and this runtime stay
 provably in sync.
