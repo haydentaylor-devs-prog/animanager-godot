@@ -120,8 +120,6 @@ hold. Each clip has a release policy (complete, cut to idle, or
 commit past a cutoff frame), and a committed attack blocks new
 inputs until it lands.
 
-![Tap for a quick strike, hold for a charged release](docs/media/charged_attack.gif)
-
 **Two-handed weapons.** A weapon fitted to one hand takes its
 rotation from the line between both hands, so it always sits
 between them. A steady-grip lock holds the weapon and both hands
@@ -180,8 +178,6 @@ scene references intact.
    auto-bind from the bundle.
 4. Tick Auto Play (or call play() from a script).
 ```
-
-![Dropping an .animrig and pressing play](docs/media/import_drop.gif)
 
 Attach effects or weapons to bones:
 
