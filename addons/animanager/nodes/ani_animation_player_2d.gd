@@ -246,6 +246,12 @@ var _layer_last_event_frame := -1
 # beam): the OVERLAY playhead parks on this frame until released
 # while the base clip keeps running underneath. -1 = no hold.
 var _layer_hold := -1.0
+# Looping overlay (2026-09-30): while true the overlay playhead wraps
+# instead of finishing, with the same wrap-segment interpolation as
+# a looping base clip - a held attack cycles seamlessly instead of
+# fading out to the base and back in between swings. play_layer()
+# resets it; clearing it lets the current cycle finish and fade.
+var _layer_looping := false
 # Bone aiming (2026-09-23, Seraph's cursor-following fireball arm):
 # per-bone WORLD-rotation targets blended over the animated pose
 # during the FK walk. Children keep their ANIMATED locals relative
@@ -504,6 +510,7 @@ func play_layer(
 	_layer_fading_out = false
 	_layer_last_event_frame = -1
 	_layer_hold = -1.0
+	_layer_looping = false
 	return true
 
 
@@ -553,6 +560,12 @@ func release_layer_hold() -> void:
 	_layer_hold = -1.0
 
 
+## Loop the active overlay (true) or let its current cycle finish and
+## fade out (false). Reset to false by every play_layer().
+func set_layer_looping(on: bool) -> void:
+	_layer_looping = on
+
+
 ## Cancel the overlay early (fades out from wherever it is).
 func stop_layer(fade: float = 0.1) -> void:
 	if _layer_rig == null:
@@ -576,28 +589,30 @@ func _clear_layer() -> void:
 	_layer_mask.clear()
 	_layer_weight = 0.0
 	_layer_fading_out = false
+	_layer_looping = false
 
 
 func _advance_layer(delta: float) -> void:
 	if _layer_rig == null:
 		return
-	var prev := _layer_frame
-	var cap := float(_layer_rig.total_frames - 1)
+	var total := float(_layer_rig.total_frames)
+	var next := _layer_frame + delta * float(_layer_rig.frame_rate) * speed
 	if _layer_hold >= 0.0:
-		cap = minf(cap, _layer_hold)
-	_layer_frame = minf(
-		_layer_frame + delta * float(_layer_rig.frame_rate) * speed, cap)
+		next = minf(next, _layer_hold)
+	if _layer_looping and _layer_hold < 0.0 and next >= total:
+		# Wrap: finish this cycle's events, then re-arm for the next.
+		_dispatch_layer_events(int(total) - 1)
+		_layer_last_event_frame = -1
+		next = fposmod(next, total)
+	elif not _layer_looping:
+		next = minf(next, total - 1.0)
+	_layer_frame = next
 	# Overlay events fire from the OVERLAY playhead (attack hit
-	# frames land mid-run). One-shot: no wrap handling needed.
-	for ev in _layer_rig.events:
-		var f := int(ev.get("frame", 0))
-		if f > int(prev) and f <= int(_layer_frame) 				and f > _layer_last_event_frame:
-			_layer_last_event_frame = f
-			emit_signal("animation_event",
-				String(ev.get("name", "")), String(ev.get("payload", "")))
+	# frames land mid-run).
+	_dispatch_layer_events(int(_layer_frame))
 	if not _layer_fading_out:
 		_layer_weight = minf(_layer_weight + delta / _layer_fade, 1.0)
-		if _layer_hold < 0.0 \
+		if _layer_hold < 0.0 and not _layer_looping \
 				and _layer_frame >= float(_layer_rig.total_frames - 1):
 			_layer_fading_out = true
 	else:
@@ -605,6 +620,20 @@ func _advance_layer(delta: float) -> void:
 		if _layer_weight <= 0.0:
 			_clear_layer()
 			emit_signal("layer_finished")
+
+
+## Fire overlay events on frames after the last one fired, up to and
+## including [upto]. Tracking only the last FIRED frame (not the
+## previous playhead) lets a frame-0 event fire on the first tick -
+## `f > int(prev)` skipped it, since prev starts at 0 (2026-09-30:
+## Seraph's fireball_creation never spawned when layered).
+func _dispatch_layer_events(upto: int) -> void:
+	for ev in _layer_rig.events:
+		var f := int(ev.get("frame", 0))
+		if f > _layer_last_event_frame and f <= upto:
+			_layer_last_event_frame = f
+			emit_signal("animation_event",
+				String(ev.get("name", "")), String(ev.get("payload", "")))
 
 
 ## Local pose source for the FK walk: base (crossfade-aware) local,
@@ -618,7 +647,7 @@ func _local_for_bone(uuid: String, frames: Array, frame: float) -> Dictionary:
 	if lf.is_empty():
 		return base
 	var ov := AniPoseEvaluator.interpolate(
-		lf, _layer_frame, _layer_rig.total_frames, false)
+		lf, _layer_frame, _layer_rig.total_frames, _layer_looping)
 	if _layer_weight >= 1.0:
 		return ov
 	var w := _layer_weight

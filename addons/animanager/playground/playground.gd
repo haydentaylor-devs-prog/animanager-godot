@@ -2315,6 +2315,10 @@ func _play_bind_layer(path: String, mask: String) -> bool:
 	_layer_bind_mask = mask
 	_layer_hold_t = 0.0
 	_layer_timer_token += 1
+	# While the input is held the overlay loops seamlessly, like a
+	# held full-body clip (loop_override = 1) - repeated swings flow
+	# into each other instead of fading to the base in between.
+	_ani.set_layer_looping(not _held_bind_key.is_empty())
 	var rel := _release_policy(path)
 	var hold_f := float(rel.get("hold_frame", -1))
 	if hold_f >= 0.0:
@@ -2356,6 +2360,8 @@ func _release_bind_layer() -> void:
 		"cutoff":
 			complete = _ani.get_layer_frame() >= float(rel.get("frame", 0))
 	if complete:
+		# Finish the current swing, then fade out.
+		_ani.set_layer_looping(false)
 		_ani.release_layer_hold()
 		return
 	# Cutting skips the events that would end effects.
@@ -2366,8 +2372,9 @@ func _release_bind_layer() -> void:
 
 
 ## Per-frame upkeep for a layered bind: charge time on the hold
-## frame, and the end of the layer - which retriggers it while the
-## input is still held (a held bind repeats, like a full-body clip).
+## frame, and the end of the layer. A held input normally keeps the
+## layer looping; the retrigger here is the fallback for a layer that
+## ended anyway (e.g. its charged branch landed while re-held).
 func _process_bind_layer(delta: float) -> void:
 	if _layer_bind_path.is_empty():
 		return
