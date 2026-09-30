@@ -13,8 +13,8 @@ shot is ABOUT the panel.
 |---|---|---|---|
 | `hero.gif` | THE showcase: Seraph idling with dress + hair physics live, staff attached; joystick-drag her sideways, stop dead, let everything swing and settle; one facing flip. | Playground | 6–8 s |
 | `crossfade.gif` | Run interrupted into a dodge (or idle→run→idle) with no popping. | Main game (F5) or HD-2D demo | 3–5 s |
-| `body_layering.gif` | Base clip playing (Herald run or Seraph idle) + attack overlay on the upper body via the Body layer section — legs keep moving through the attack. | Playground | 4–6 s |
-| `bone_aim.gif` | "Aim bone at mouse cursor" on: sweep the mouse in a circle, arm tracks it while the idle plays underneath. | Playground | 3–5 s |
+| `body_layering.gif` | Base clip playing (Herald run) + attack overlay via the Animation Layering menu (mask roots: both arms + neck) — legs keep running through the attack. | Playground | 4–6 s |
+| `bone_aim.gif` | Per-animation cursor aim (Advanced menu > "Aim a bone at the cursor" on the idle, plus "Face the cursor"): sweep the mouse in a circle, arm tracks it while the idle plays underneath. | Playground | 3–5 s |
 | `cloth_sim.gif` | Close-up of the physics: yank with the joystick, release, watch dress/cape/ponytail trail and settle; include one flip (sim reset). Zoom slider up for a tight crop. | Playground | 4–6 s |
 | `shaded_mode.gif` | Herald (masked armor) with Shaded on: drag Light X/Y sliders end to end — the metal glints and normal-mapped shading sweep across the armor. | Playground | 4–6 s |
 | `playground.png` | Full-window screenshot: character mid-sway, weapon attached, tuning panel visible with a couple of sections collapsed (shows the fold feature). | Playground | still |
