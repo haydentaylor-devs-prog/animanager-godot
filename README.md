@@ -5,7 +5,7 @@
 
 **2D skeletal animation runtime for Godot 4** — the game-engine half
 of a tablet-to-game pipeline. Characters are drawn, rigged, and
-animated in [AniMate](https://github.com/haydentaylor-devs-prog/animanager)
+animated in AniMate
 (a mobile animation studio for iPad / Android tablets); this plugin
 imports the exported `.animrig` files and plays them back with
 runtime features the authoring app doesn't need to know about:
@@ -147,9 +147,7 @@ transition.
 
 - Godot 4.x.
 - An `.animrig` (or `.rig` + `.parts/` folder) exported from
-  AniMate. The
-  [.rig spec](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md)
-  is the authoritative format reference (currently v1.6).
+  AniMate. This runtime implements `.rig` format spec v1.6.
 - `examples/quarter_turn.rig` in this repo is a minimal rig for
   verifying setup without the app.
 
@@ -292,10 +290,8 @@ checks over the importer, evaluator, IK, cross-fade, layering and
 physics, so the format spec, the exporter, and this runtime stay
 provably in sync.
 
-Bug reports and PRs welcome via
+Bug reports, format questions, and PRs are welcome via
 [GitHub issues](https://github.com/haydentaylor-devs-prog/animanager-godot/issues).
-Format questions belong on the
-[spec doc](https://github.com/haydentaylor-devs-prog/animanager/blob/main/docs/rig-spec.md).
 
 ## License
 
