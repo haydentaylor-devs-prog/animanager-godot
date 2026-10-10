@@ -248,8 +248,15 @@ same bone names, sprite bindings persist. If they diverge, use
 one `AniAnimationPlayer2D` per animation and toggle their
 `visible` and `_is_playing` flags.
 
-**Cross-fading** isn't in v1 of the spec or plugin. If you need
-it, run two players and cross-fade their `modulate.a`.
+**Cross-fading** is built in: `crossfade_to(new_rig, duration)`
+blends from the current pose into the new clip (authored
+transition clips take precedence; everything else blends
+procedurally, IK targets included). For upper/lower-body splits —
+attacking while the legs keep running — use
+`play_layer(...)` with a bone mask (comma-separated multi-root
+masks supported) and `stop_layer(fade)`. Any bone can also track a
+target while the rest of the clip plays via
+`set_bone_aim(...)` / `clear_bone_aim(bone_name)`.
 
 ### Facing direction
 
@@ -373,17 +380,21 @@ Two options:
 - **Bundle audio.** Per-frame audio clips authored in AniManager
   don't ship in the `.rig` yet (spec v2). Handle sound via
   `animation_event` callbacks that trigger your own `AudioStreamPlayer`s.
-- **Cross-fade between animations.** Reassign `rig` for a hard
-  cut; layer two players for a manual cross-fade.
 - **Runtime rig editing.** The `AniRigResource` is meant to be
   read-only at runtime. Mutating `bones[]` or `keyframes[]`
   works but the pose evaluator caches indices; you'd need to
   call `_rebuild_indices()` (currently private) to pick up changes.
 - **Mesh deformation / weighted skinning.** Rigid attachments
-  only. Every sprite is a whole texture on one bone.
-- **Physics / secondary motion.** Springs, cloth, and dangly bits
-  are your game code's responsibility. Query `get_bone_world_transform`
-  and drive whatever you like.
+  only. Every sprite is a whole texture on one bone. (AniMate's
+  in-app FFD mesh deform is not exported — a spec-v2 item.)
+
+Formerly on this list, now built in: **cross-fades**
+(`crossfade_to`), **body layering** (`play_layer` /
+`stop_layer`), **bone aiming** (`set_bone_aim`), **cloth / hair /
+limb secondary motion** (verlet simulation on bones flagged by
+naming convention — `cloth_enabled`, `cloth_bone_keywords`,
+`hair_bone_keywords`), and **normal-mapped shaded rendering**
+(`shaded`, from the `.animrig`'s material/normal sidecars).
 
 For anything on this list, the pattern is the same: use the
 plugin for the authored motion, layer your own game systems on
