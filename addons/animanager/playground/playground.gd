@@ -1064,6 +1064,41 @@ func _build_shading_menu() -> void:
 	_slider_into(lit_box, "Diffuse wrap (0 hard - 1 shadowless)",
 		0.0, 1.0, float(s.get("wrap", 0.4)),
 		func(v: float) -> void: _domain_edit("shading", "wrap", v))
+	# Painterly ramp (2026-10-12): hue-shifted shading for the Lit
+	# bucket — flat-color art shades with color variation instead of
+	# a plain darken. 0 = classic half-lambert.
+	_slider_into(lit_box, "Painterly (0 classic - 1 full)",
+		0.0, 1.0, float(s.get("paint", 0.0)),
+		func(v: float) -> void: _domain_edit("shading", "paint", v))
+	_slider_into(lit_box, "Shadow push",
+		0.0, 1.0, float(s.get("p_sh", 0.55)),
+		func(v: float) -> void: _domain_edit("shading", "p_sh", v))
+	_slider_into(lit_box, "Highlight push",
+		0.0, 1.0, float(s.get("p_hi", 0.4)),
+		func(v: float) -> void: _domain_edit("shading", "p_hi", v))
+	_slider_into(lit_box, "Painterly contrast",
+		0.5, 16.0, float(s.get("p_con", 6.0)),
+		func(v: float) -> void: _domain_edit("shading", "p_con", v))
+	_slider_into(lit_box, "Cel bands (0 smooth, 2+ posterized)",
+		0.0, 8.0, float(s.get("bands", 0.0)),
+		func(v: float) -> void: _domain_edit("shading", "bands", roundf(v)))
+	_slider_into(lit_box, "Cel softness",
+		0.0, 1.0, float(s.get("cel_w", 0.15)),
+		func(v: float) -> void: _domain_edit("shading", "cel_w", v))
+	var sh_pick := ColorPickerButton.new()
+	sh_pick.text = "Shadow color"
+	sh_pick.custom_minimum_size = Vector2(0, 28)
+	sh_pick.color = Color.html(String(s.get("p_shc", "261f59")))
+	sh_pick.color_changed.connect(func(c: Color) -> void:
+		_domain_edit("shading", "p_shc", c.to_html(false)))
+	lit_box.add_child(sh_pick)
+	var hi_pick := ColorPickerButton.new()
+	hi_pick.text = "Highlight color"
+	hi_pick.custom_minimum_size = Vector2(0, 28)
+	hi_pick.color = Color.html(String(s.get("p_hic", "ffedc7")))
+	hi_pick.color_changed.connect(func(c: Color) -> void:
+		_domain_edit("shading", "p_hic", c.to_html(false)))
+	lit_box.add_child(hi_pick)
 	var em_box := _collapsible(_content, "Emissive", true)
 	_slider_into(em_box, "Emissive energy", 0.0, 4.0,
 		float(s.get("em", 1.2)),
@@ -2490,6 +2525,16 @@ func _apply_domain(domain: String) -> void:
 			_ani.metal_tint = float(t.tint)
 			_ani.metalness = float(t.get("metal", 1.0))
 			_ani.diffuse_wrap = float(t.get("wrap", 0.4))
+			_ani.painterly = float(t.get("paint", 0.0))
+			_ani.painterly_shadow_color = Color.html(
+				String(t.get("p_shc", "261f59")))
+			_ani.painterly_shadow_strength = float(t.get("p_sh", 0.55))
+			_ani.painterly_highlight_color = Color.html(
+				String(t.get("p_hic", "ffedc7")))
+			_ani.painterly_highlight_strength = float(t.get("p_hi", 0.4))
+			_ani.painterly_contrast = float(t.get("p_con", 6.0))
+			_ani.cel_bands = int(roundf(float(t.get("bands", 0.0))))
+			_ani.cel_softness = float(t.get("cel_w", 0.15))
 			_ani.emissive_energy = float(t.get("em", 1.2))
 			_ani.rim_strength = float(t.get("rim_s", 0.7))
 			_ani.rim_power = float(t.get("rim_p", 3.0))

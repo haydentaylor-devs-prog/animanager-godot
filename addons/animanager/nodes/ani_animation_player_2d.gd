@@ -130,6 +130,57 @@ signal layer_finished
 		rim_power = value
 		_apply_shading_uniforms()
 
+# ── Painterly lit ramp (2026-10-12) ─────────────────────────────────
+# Shades the Lit bucket with variations of the painted color instead
+# of a plain brightness multiply: shadow side mixes toward
+# painterly_shadow_color (cooler), light side toward
+# painterly_highlight_color (warmer), authored color at the midpoint.
+# 0 (default) = legacy half-lambert, bit-identical for existing rigs.
+@export_range(0.0, 1.0) var painterly: float = 0.0:
+	set(value):
+		painterly = value
+		_apply_shading_uniforms()
+
+@export var painterly_shadow_color: Color = Color(0.15, 0.12, 0.35):
+	set(value):
+		painterly_shadow_color = value
+		_apply_shading_uniforms()
+
+@export_range(0.0, 1.0) var painterly_shadow_strength: float = 0.55:
+	set(value):
+		painterly_shadow_strength = value
+		_apply_shading_uniforms()
+
+@export var painterly_highlight_color: Color = Color(1.0, 0.93, 0.78):
+	set(value):
+		painterly_highlight_color = value
+		_apply_shading_uniforms()
+
+@export_range(0.0, 1.0) var painterly_highlight_strength: float = 0.4:
+	set(value):
+		painterly_highlight_strength = value
+		_apply_shading_uniforms()
+
+# Gain on the lighting deviation before it samples the ramp: gentle
+# Auto-Dome height maps tilt normals only a few degrees and would
+# barely move off the albedo midpoint without it.
+@export_range(0.5, 16.0) var painterly_contrast: float = 6.0:
+	set(value):
+		painterly_contrast = value
+		_apply_shading_uniforms()
+
+# Posterize the painterly lighting into N flat tone zones (cel look).
+# 0/1 = smooth ramp. Only meaningful while painterly > 0.
+@export_range(0, 8) var cel_bands: int = 0:
+	set(value):
+		cel_bands = value
+		_apply_shading_uniforms()
+
+@export_range(0.0, 1.0) var cel_softness: float = 0.15:
+	set(value):
+		cel_softness = value
+		_apply_shading_uniforms()
+
 @export_group("Cloth")
 
 # Secondary motion for cloth bones (capes, loincloths, tassels):
@@ -1198,6 +1249,11 @@ func _rebuild_shaded_children() -> void:
 		add_child(sprite)
 		_shaded_sprites[uuid] = sprite
 
+	# Push the full uniform set (metalness, wrap, painterly, ...): the
+	# per-material block above only covers textures + the originals, and
+	# a node whose exports were tuned before this rebuild would
+	# otherwise render fresh children at shader defaults.
+	_apply_shading_uniforms()
 	_update_shaded_children()
 
 
@@ -1240,6 +1296,16 @@ func _apply_shading_uniforms() -> void:
 		mat.set_shader_parameter("emissive_energy", emissive_energy)
 		mat.set_shader_parameter("rim_strength", rim_strength)
 		mat.set_shader_parameter("rim_power", rim_power)
+		mat.set_shader_parameter("painterly", painterly)
+		mat.set_shader_parameter("shadow_color", painterly_shadow_color)
+		mat.set_shader_parameter("shadow_strength", painterly_shadow_strength)
+		mat.set_shader_parameter("highlight_color", painterly_highlight_color)
+		mat.set_shader_parameter(
+			"highlight_strength", painterly_highlight_strength
+		)
+		mat.set_shader_parameter("painterly_contrast", painterly_contrast)
+		mat.set_shader_parameter("cel_bands", cel_bands)
+		mat.set_shader_parameter("cel_softness", cel_softness)
 
 
 func _shade_textures_for_bone(bone: Dictionary) -> Dictionary:

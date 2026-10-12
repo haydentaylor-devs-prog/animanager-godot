@@ -44,6 +44,10 @@ static func default_shading() -> Dictionary:
 	return {
 		"shaded": true, "tint": 2.0, "lx": 0.35, "ly": -0.55, "lz": 0.75,
 		"metal": 1.0, "wrap": 0.4, "em": 1.2, "rim_s": 0.7, "rim_p": 3.0,
+		# Painterly lit ramp (2026-10-12): 0 = classic half-lambert.
+		"paint": 0.0, "p_shc": "261f59", "p_sh": 0.55,
+		"p_hic": "ffedc7", "p_hi": 0.4, "p_con": 6.0,
+		"bands": 0.0, "cel_w": 0.15,
 	}
 
 
