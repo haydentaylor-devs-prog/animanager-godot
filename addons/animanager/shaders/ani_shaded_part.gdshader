@@ -67,6 +67,17 @@ uniform float highlight_strength : hint_range(0.0, 1.0) = 0.4;
 uniform float painterly_contrast : hint_range(0.5, 16.0) = 6.0;
 uniform int cel_bands : hint_range(0, 8) = 0;
 uniform float cel_softness : hint_range(0.0, 1.0) = 0.15;
+// Palette-locked bands (2026-10-12): with palette_count >= 2 the
+// painterly output snaps to EXACTLY these colors (dark -> light),
+// one per band, instead of the albedo-derived ramp — pixel-art
+// shading where the artist owns every tone. The band count comes
+// from palette_count (cel_bands is ignored); cel_softness still
+// shapes the boundaries (0 = pixel-crisp).
+uniform int palette_count : hint_range(0, 4) = 0;
+uniform vec4 palette_0 : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform vec4 palette_1 : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform vec4 palette_2 : source_color = vec4(1.0, 1.0, 1.0, 1.0);
+uniform vec4 palette_3 : source_color = vec4(1.0, 1.0, 1.0, 1.0);
 uniform float emissive_energy : hint_range(0.0, 4.0) = 1.2;
 uniform vec4 rim_color : source_color = vec4(0.75, 0.88, 1.0, 1.0);
 uniform float rim_power : hint_range(1.0, 8.0) = 3.0;
@@ -125,19 +136,33 @@ vec3 oklab_to_lin(vec3 c) {
 		-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s);
 }
 
-// Posterize the lighting term into cel_bands flat tone zones spanning
+// Posterize the lighting term into `bands` flat tone zones spanning
 // [0,1] (bands=3 -> plateaus at 0, 0.5, 1), with smoothstepped
 // transitions cel_softness wide. bands < 2 passes through untouched.
-float cel_quantize(float t) {
-	if (cel_bands < 2) {
+float cel_quantize(float t, int bands) {
+	if (bands < 2) {
 		return t;
 	}
-	float steps = float(cel_bands - 1);
+	float steps = float(bands - 1);
 	float s = t * steps;
 	float f = floor(s);
 	float w = max(cel_softness * 0.5, 0.0005);
 	float e = smoothstep(0.5 - w, 0.5 + w, s - f);
 	return clamp((f + e) / steps, 0.0, 1.0);
+}
+
+// Palette-locked band color: quantized lighting picks among the
+// artist's exact colors, dark -> light; plateaus ARE the palette
+// entries, boundaries blend linearly in sRGB per cel_softness.
+vec3 palette_band(float q) {
+	float pos = q * float(palette_count - 1);
+	int i = clamp(int(floor(pos)), 0, palette_count - 2);
+	float f = clamp(pos - float(i), 0.0, 1.0);
+	vec3 a = i == 0 ? palette_0.rgb
+		: (i == 1 ? palette_1.rgb : palette_2.rgb);
+	vec3 b = i == 0 ? palette_1.rgb
+		: (i == 1 ? palette_2.rgb : palette_3.rgb);
+	return mix(a, b, f);
 }
 
 // Albedo-derived shading ramp sampled by the lighting term t: the
@@ -203,8 +228,10 @@ void fragment() {
 			? 0.5 * hl / max(hl_flat, 1e-4)
 			: 0.5 + 0.5 * (hl - hl_flat) / max(1.0 - hl_flat, 1e-4);
 		t = clamp(0.5 + (t - 0.5) * painterly_contrast, 0.0, 1.0);
-		lit_col = mix(lit_col, painterly_ramp(albedo.rgb, cel_quantize(t)),
-			painterly);
+		vec3 ramp = palette_count >= 2
+			? palette_band(cel_quantize(t, palette_count))
+			: painterly_ramp(albedo.rgb, cel_quantize(t, cel_bands));
+		lit_col = mix(lit_col, ramp, painterly);
 	}
 	vec3 nonmetal = mix(albedo.rgb, lit_col, lit_amt);
 

@@ -1099,6 +1099,21 @@ func _build_shading_menu() -> void:
 	hi_pick.color_changed.connect(func(c: Color) -> void:
 		_domain_edit("shading", "p_hic", c.to_html(false)))
 	lit_box.add_child(hi_pick)
+	# Palette-locked bands (2026-10-12): 2-4 exact colors override
+	# the ramp entirely (pixel-art shading). 0/1 = off.
+	_slider_into(lit_box, "Palette bands (0 = off, 2-4 lock)",
+		0.0, 4.0, float(s.get("pal_n", 0.0)),
+		func(v: float) -> void: _domain_edit("shading", "pal_n", roundf(v)))
+	for pi in range(4):
+		var idx := pi
+		var pick := ColorPickerButton.new()
+		pick.text = "Palette %d (dark -> light)" % (idx + 1)
+		pick.custom_minimum_size = Vector2(0, 28)
+		pick.color = Color.html(
+			String(s.get("pal_%d" % idx, "ffffff")))
+		pick.color_changed.connect(func(c: Color) -> void:
+			_domain_edit("shading", "pal_%d" % idx, c.to_html(false)))
+		lit_box.add_child(pick)
 	var em_box := _collapsible(_content, "Emissive", true)
 	_slider_into(em_box, "Emissive energy", 0.0, 4.0,
 		float(s.get("em", 1.2)),
@@ -2535,6 +2550,13 @@ func _apply_domain(domain: String) -> void:
 			_ani.painterly_contrast = float(t.get("p_con", 6.0))
 			_ani.cel_bands = int(roundf(float(t.get("bands", 0.0))))
 			_ani.cel_softness = float(t.get("cel_w", 0.15))
+			var pal := PackedColorArray()
+			var pal_n := int(roundf(float(t.get("pal_n", 0.0))))
+			for pi in range(clampi(pal_n, 0, 4)):
+				pal.append(Color.html(
+					String(t.get("pal_%d" % pi, "ffffff"))))
+			_ani.painterly_palette = pal if pal_n >= 2 \
+				else PackedColorArray()
 			_ani.emissive_energy = float(t.get("em", 1.2))
 			_ani.rim_strength = float(t.get("rim_s", 0.7))
 			_ani.rim_power = float(t.get("rim_p", 3.0))

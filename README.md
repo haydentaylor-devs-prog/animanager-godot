@@ -208,7 +208,8 @@ opt legs into the limb class. Name `Skirt Cloth Front` /
 | `shaded` / `matcap` / `light_direction` / `metal_tint` | Shaded-mode rendering. |
 | `metalness` / `diffuse_wrap` / `emissive_energy` / `rim_strength` / `rim_power` | Per-material shading response. |
 | `painterly` / `painterly_shadow_color` / `painterly_shadow_strength` / `painterly_highlight_color` / `painterly_highlight_strength` / `painterly_contrast` | Painterly lit ramp: shades the Lit bucket with hue-shifted variations of the painted color (shadows cool, highlights warm, in OKLab) instead of a plain darken. `painterly` 0 (default) = classic half-lambert; `painterly_contrast` amplifies gentle height maps. |
-| `cel_bands` / `cel_softness` | Posterize the painterly lighting into N flat tone zones (cel look); 0/1 = smooth ramp. |
+| `cel_bands` / `cel_softness` | Posterize the painterly lighting into N flat tone zones (cel look); 0/1 = smooth ramp. `cel_softness` 0 = pixel-crisp band edges. |
+| `painterly_palette` | Palette-locked bands: 2-4 exact colors (dark → light) replace the albedo-derived ramp entirely — pixel-art shading where the artist owns every tone. Empty = classic ramp. |
 | `cloth_*`, `hair_*`, `limb_*` | Physics keywords + stiffness/damping/inertia per material class. |
 | `draw_bones_in_editor` + colors | Debug bone rendering for unbound rigs. |
 

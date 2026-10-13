@@ -181,6 +181,15 @@ signal layer_finished
 		cel_softness = value
 		_apply_shading_uniforms()
 
+# Palette-locked bands (2026-10-12): 2-4 exact colors (dark -> light)
+# replace the albedo-derived ramp, one per band — pixel-art shading
+# where the artist owns every tone. Empty/1 = classic ramp. Band
+# count = array length; cel_softness still shapes the boundaries.
+@export var painterly_palette: PackedColorArray = PackedColorArray():
+	set(value):
+		painterly_palette = value
+		_apply_shading_uniforms()
+
 @export_group("Cloth")
 
 # Secondary motion for cloth bones (capes, loincloths, tassels):
@@ -1306,6 +1315,15 @@ func _apply_shading_uniforms() -> void:
 		mat.set_shader_parameter("painterly_contrast", painterly_contrast)
 		mat.set_shader_parameter("cel_bands", cel_bands)
 		mat.set_shader_parameter("cel_softness", cel_softness)
+		var pal_n := mini(painterly_palette.size(), 4)
+		mat.set_shader_parameter(
+			"palette_count", pal_n if pal_n >= 2 else 0
+		)
+		for pi in range(4):
+			mat.set_shader_parameter(
+				"palette_%d" % pi,
+				painterly_palette[pi] if pi < pal_n else Color.WHITE
+			)
 
 
 func _shade_textures_for_bone(bone: Dictionary) -> Dictionary:

@@ -48,6 +48,9 @@ static func default_shading() -> Dictionary:
 		"paint": 0.0, "p_shc": "261f59", "p_sh": 0.55,
 		"p_hic": "ffedc7", "p_hi": 0.4, "p_con": 6.0,
 		"bands": 0.0, "cel_w": 0.15,
+		# Palette-locked bands: count 0 = off; colors dark -> light.
+		"pal_n": 0.0, "pal_0": "d99388", "pal_1": "f9d0be",
+		"pal_2": "ffe8d8", "pal_3": "ffffff",
 	}
 
 
